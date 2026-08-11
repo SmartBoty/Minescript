@@ -9,10 +9,15 @@ version_mappings = {
     "keyevent_const": {
         (0,12108) : ("event.key,event.scan_code",""),
         (12109,999999): ("KeyEvent(event.key,event.scan_code,event.modifiers)","""KeyEvent = JavaClass("net.minecraft.client.input.KeyEvent")""")
+    },
+    "hud_const": {
+        (0,99261) : "mc.gui",
+        (99262,999999): "mc.gui.hud"
     }
 }
 
 keyevent_mapping = [v for k,v in version_mappings["keyevent_const"].items() if k[0] <= version <= k[1]][0]
+hud_mapping = [v for k,v in version_mappings["hud_const"].items() if k[0] <= version <= k[1]][0]
 
 #from system.lib.minescript import *
 from threading import Thread
@@ -136,8 +141,10 @@ def __serve_listener__():
                         "time": time(),
                         "message": event["text"]
                     })
+            else:
+                m.log(f"[EventLib] Event unnaccounted for: {event["event"]} ({event})")
             queues = []
-        except: m.log(f"Malformed json event: '{line}'")
+        except: m.log(f"[EventLib] Malformed json event: '{line[:-1]}'")
 
 script = eps(
 r"""
@@ -192,8 +199,8 @@ bridge = Socket("127.0.0.1", """ + str(port) + r""")
 writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
 hp = player_health()
 food = [mc.player.getFoodData().getFoodLevel(),mc.player.getFoodData().getSaturationLevel()]
-ab_timestamp_predicted = reflect_field(mc.gui,"overlayMessageTime")
-chatlength = len(list(reflect_field(mc.gui.getChat(), "allMessages")))
+ab_timestamp_predicted = reflect_field(""" + hud_mapping + r""","overlayMessageTime")
+chatlength = len(list(reflect_field(""" + hud_mapping + r""".getChat(), "allMessages")))
 
 def add_event(event):
     writer.write(event.replace("\n",r"\n") + "\n")
@@ -270,16 +277,16 @@ def tick(event):
             add_event('{"event":"food_change","food":' + str(new_food[0]) + ',"saturation":' + str(new_food[1]) + '}')
             food = new_food
     if __script__.vars["game"]["eventlib"][identifier]["actionbar_change"]:
-        try: nab = reflect_field(mc.gui,"overlayMessageString").getString()
+        try: nab = reflect_field(""" + hud_mapping + r""","overlayMessageString").getString()
         except: nab = None
-        time = reflect_field(mc.gui,"overlayMessageTime")
+        time = reflect_field(""" + hud_mapping + r""","overlayMessageTime")
         if time != ab_timestamp_predicted-1 and time > 0:
             add_event('{"event":"actionbar_change","message":"' + sanitize_string(nab) + '"}')
         ab_timestamp_predicted = time
 
 def frame(_):
     global chatlength
-    msgs = list(reflect_field(mc.gui.getChat(), "allMessages"))
+    msgs = list(reflect_field(""" + hud_mapping + r""".getChat(), "allMessages"))
     new = []
     if len(msgs) > chatlength:
         for i in range(len(msgs)- chatlength):
@@ -486,7 +493,7 @@ def register_actionbar_change_listener(self):
     registered_actionbar_change.append(self.queue)
 
 def eventlib_register_chat_listener(self,*,eventlib=False):
-    if eventlib: 
+    if eventlib:
         execute(fr"""\eval '0' '__script__.vars["game"]["eventlib"]["{identifier}"]["chat_listener"] = True'""")
         self.eventlib_listeners.append("chat_listener")
         registered_chat.append(self.queue)
