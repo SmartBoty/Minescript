@@ -1,6 +1,6 @@
 <script>
 const params = new URLSearchParams(location.search);
-const file = params.get("file");
+const file = params.get("file")?.replace(/^["']|["']$/g, "");;
 const folders = ["eventlib/", "base%20minescript%20tools/", "Jynnton/", "lib_inv/", "pyjinn/", "/"];
 
 (async () => {
