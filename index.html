@@ -1,13 +1,13 @@
 <script>
 const params = new URLSearchParams(location.search);
-const file = params.get("file")?.replace(/^["']|["']$/g, "");;
+const file = params.get("file")?.replace(/^["']|["']$/g, "");
 const folders = ["eventlib/", "base%20minescript%20tools/", "Jynnton/", "lib_inv/", "pyjinn/", "/"];
 
 (async () => {
     if (file) {
       for (const folder of folders) {
         const url = folder + encodeURIComponent(file);
-        const response = await fetch(url, {method: "HEAD"});
+        const response = await fetch(url, { method: "HEAD" });
         if (response.ok) {
             location.href = url;
             return;
