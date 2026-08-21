@@ -9,10 +9,22 @@ from system.lib.java import eval_pyjinn_script as eps
 from concurrent.futures import Future
 import sys
 import os
-from time import sleep
 
 concurrent = {}
 registered_python_functions = {}
+
+class JavaClass:
+    def __init__(self, _class, name=None):
+        self._class = _class
+        writer.write(json.dumps({"type":5,"class":_class,"name":name if name is not None else _class.split(".")[-1].split("$")[-1]}, separators=(",", ":"))+"\n")
+
+class JynntonCommonsMeta(type):
+    @property
+    def mc(cls):
+        code = 'mc = JavaClass("net.minecraft.client.Minecraft").getInstance()'
+        writer.write(json.dumps({"type": 6, "code": code}, separators=(",", ":"))+"\n")
+
+class JynntonCommons(metaclass=JynntonCommonsMeta): pass
 
 class JynntonFlags:
     mc:str="common@mc"
@@ -244,6 +256,12 @@ async def ''' + func + '''(*args,**kwargs):
         elif payload["type"] == 4: # add_event_listener {"type":4,"event":event,"name":func.__name__,"async":is_async}
             if payload["async"]: add_event_listener(payload["event"],lambda event: EventLoop().run(lambda this: run_async_function(payload["name"],-1,False,[event],{}))) # name,ufcid,returns,args,kwargs
             else: add_event_listener(payload["event"],__script__.mainModule().globals().get(payload["name"]))
+        elif payload["type"] == 5: # javaclass register -> {"type":5,"class":_class,"name":name if name is not None else _class.split(".")[-1].split("$")[-1]}
+            exec(f'{payload["name"]} = JavaClass("{payload["class"]}")')
+        elif payload["type"] == 6: # ace -> {"type":6,"code":code}
+            exec(payload["code"])
+
+__atexit_register__(lambda: return_call({"ufcid":-2}))
 
 log("[Jynnton] Starting main loop")
 add_event_listener("render",_main)
@@ -265,6 +283,7 @@ def __reader__():
             if data["fail"]:
                 sys.stderr.write((f"The following could not be raised on the main thread:\n{data["result"]}\n \nNOTICE:\n The above error is the result of a non returning function call from Jynnton. For debugging purposes, add a 'return' to it",)[0])
                 os._exit(-1)
+        elif data["ufcid"] == -2: os._exit(0)
         elif data["ufcid"]:
             res = registered_python_functions[data["func"]](*data["args"],**data["kwargs"])
             if data["returns"]:
