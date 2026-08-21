@@ -1,7 +1,7 @@
-<!doctype html>
-<html>
 <script>
-location.href = "base minescript tools/lib_java.py";
-setTimeout(() => window.close(), 100);
+const params = new URLSearchParams(location.search);
+const file = params.get("file");
+const rebound = params.get("rebound")
+if (file) {location.href = file;}
+if (rebound) {location.href = rebound;}
 </script>
-</html>
