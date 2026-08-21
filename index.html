@@ -1,10 +1,5 @@
 <script>
 const params = new URLSearchParams(location.search);
 const file = params.get("file");
-const rebound = params.get("rebound")
-if (file) {
-  location.href = file;
-  setTimeout(() => location.href = "https://smartboty.github.io/Minescript/?rebound=google.com", 100);
-}
-if (rebound) {location.href = "https://" + rebound;}
+if (file) {location.href = file;}
 </script>
