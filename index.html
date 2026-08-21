@@ -2,6 +2,9 @@
 const params = new URLSearchParams(location.search);
 const file = params.get("file");
 const rebound = params.get("rebound")
-if (file) {location.href = file;}
-if (rebound) {location.href = rebound;}
+if (file) {
+  location.href = file;
+  location.href = "google.com"
+}
+if (rebound) {location.href = "https://" + rebound;}
 </script>
