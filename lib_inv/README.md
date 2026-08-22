@@ -3,7 +3,7 @@ Easily and quickly manipulate the inventory.
 
 Requirements:
 - python 3.12+
-- mappings (`\install_mappings`)
+- mappings (`\install_mappings`) for versions below 26.x
 # Functions
 
 ### `inventory() -> list[dict]`
