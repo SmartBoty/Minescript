@@ -37,7 +37,8 @@ def add_event_listener(event,func):
     writer.flush()
 
 def register_python_function(func):
-    returns = any(has_return(child) for child in ast.iter_child_nodes(ast.parse(inspect.getsource(func).split("\n",1)[-1]).body[0]))
+    try: returns = any(has_return(child) for child in ast.iter_child_nodes(ast.parse(inspect.getsource(func).split("\n",1)[-1]).body[0]))
+    except: returns = True
     registered_python_functions[func.__name__] = func
     payload = json.dumps({"type":2, "funcs":[func.__name__], "returns":returns}, separators=(",", ":"))
     writer.write(payload + "\n")
@@ -201,6 +202,7 @@ async def run_async_function(name,ufcid,returns,args,kwargs):
     try: result = await __script__.mainModule().globals().get(name)(*args,**kwargs) ; fail = False
     except Exception as e: result = e.getMessage() ; fail = True
     if returns: return_call({"ufcid":ufcid,"result":result,"fail":fail})
+    else: return_call({"ufcid":-1,"result":result,"fail":fail})
 
 def _main(_):
     lines = []
