@@ -60,7 +60,6 @@ def call_function(name,is_async,returns,args,kwargs):
         future = Future()
         concurrent[ufcid] = future
         payload = future.result()
-        concurrent.pop(ufcid)
         if payload["fail"]: raise Exception(payload["result"])
         else: return payload["result"]
 
