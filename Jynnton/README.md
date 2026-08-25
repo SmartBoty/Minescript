@@ -58,3 +58,4 @@ with pyj:
 
 while True: sleep(1)
 ```
+Ps: im really sorry for those who want to rewiew the code. Ping me if you need something specific*!*
