@@ -49,18 +49,23 @@ class JynntonFlags:
     def JavaClass(_class): return f"class@{_class}"
 
 class PyjinnContextLeave(Exception): pass
+class ConcurrentPyjinnAccessError(Exception): pass
 
 class Pyjinn:
     def __init__(self):
-        self.depth = 0
         self.lock = Lock()
+        self.initialized = False
+        self.ufcid = None
     
     def __enter__(self, *_, **__):
-        with self.lock: self.depth += 1
-        if not hasattr(self, "ufcid"):
-            frame = inspect.currentframe().f_back
-            src, start_line = inspect.getsourcelines(frame)
-            current_line = frame.f_lineno - start_line
+        frame = inspect.currentframe().f_back
+        src, start_line = inspect.getsourcelines(frame)
+        current_line = frame.f_lineno - start_line
+        with self.lock:
+            if self.initialized is False or self.initialized == current_line:
+                self.initialized = current_line
+            else: raise ConcurrentPyjinnAccessError("Cannot reuse the same Pyjinn context manager!")
+        if not self.ufcid:
             lines = []
             base_indent = None
             for line in src[current_line:]:
@@ -99,7 +104,6 @@ class Pyjinn:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        with self.lock: self.depth -= 1
         if exc_type is PyjinnContextLeave: return True
         return False
 
