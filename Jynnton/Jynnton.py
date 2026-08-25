@@ -57,21 +57,21 @@ class Pyjinn:
     
     def __enter__(self, *_, **__):
         with self.lock: self.depth += 1
-        frame = inspect.currentframe().f_back
-        src, start_line = inspect.getsourcelines(frame)
-        current_line = frame.f_lineno - start_line
-        lines = []
-        base_indent = None
-        for line in src[current_line:]:
-            stripped = line.lstrip()
-            if not stripped or stripped.startswith("#"): continue
-            indent = len(line) - len(line.lstrip())
-            if base_indent is None: base_indent = indent
-            elif indent < base_indent: break
-            lines.append(line)
-        if lines[0].startswith("with"): lines = lines[1:]
-        code = "".join((line[base_indent:] for line in lines))
         if not hasattr(self, "ufcid"):
+            frame = inspect.currentframe().f_back
+            src, start_line = inspect.getsourcelines(frame)
+            current_line = frame.f_lineno - start_line
+            lines = []
+            base_indent = None
+            for line in src[current_line:]:
+                stripped = line.lstrip()
+                if not stripped or stripped.startswith("#"): continue
+                indent = len(line) - len(line.lstrip())
+                if base_indent is None: base_indent = indent
+                elif indent < base_indent: break
+                lines.append(line)
+            if lines[0].startswith("with"): lines = lines[1:]
+            code = "".join((line[base_indent:] for line in lines))
             with self.lock: self.ufcid = f"{get_ident()}@{uuid4()}"
             payload = {"type":7,"ufcid":self.ufcid,"code":code}
             tree = ast.parse(code)
