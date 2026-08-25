@@ -15,14 +15,18 @@ What this library allows you to do:
 - And ofc, access java internals in just miliseconds
 
 ## How to use the library
-Very simple actually. Just use the given decorator
+Very simple actually. Just use the given decorator or context manager
 ```py
-from Jynnton import as_pyjinn
+from Jynnton import as_pyjinn, Pyjinn
 
 @as_pyjinn()
 def foo(): pass
+
+pyj = Pyjinn()
+with pyj:
+    def bar(): pass
 ```
-Upon calling `foo()`, the function will now be called in Pyjinn
+Upon calling `foo()` or `bar()`, the function will now be called in Pyjinn
 
 Example usage:
 
