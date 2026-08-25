@@ -1,19 +1,36 @@
+from __future__ import annotations
 import inspect
 import ast
 from functools import wraps
 import json
 from uuid import uuid4
-from threading import get_ident, Thread
+from threading import get_ident, Thread, Lock
 import socket
 from system.lib.java import eval_pyjinn_script as eps
 from concurrent.futures import Future
 import sys
 import os
+from time import sleep
+import builtins
 
 concurrent = {}
 registered_python_functions = {}
+cached = []
 
-class JavaClass:
+class JavaObj:
+    def __init__(self, path="", name=""):
+        if path and name: self.__dict__["path"] = f"{path}.{name}"
+        else: self.__dict__["path"] = path or name
+
+    def __getattr__(self, name):
+        if not name.startswith("__") and name.endswith("__"):
+            return JavaObj(self.path, name)
+        return self
+
+    def __call__(self) -> JavaObj:
+        raise AttributeError("Jynnton JavaObj is not callable in python context")
+
+class JavaClass(JavaObj):
     def __init__(self, _class, name=None):
         self._class = _class
         writer.write(json.dumps({"type":5,"class":_class,"name":name if name is not None else _class.split(".")[-1].split("$")[-1]}, separators=(",", ":"))+"\n")
@@ -31,6 +48,61 @@ class JynntonFlags:
     @staticmethod
     def JavaClass(_class): return f"class@{_class}"
 
+class PyjinnContextLeave(Exception): pass
+
+class Pyjinn:
+    def __init__(self):
+        self.depth = 0
+        self.lock = Lock()
+    
+    def __enter__(self, *_, **__):
+        with self.lock: self.depth += 1
+        frame = inspect.currentframe().f_back
+        src, start_line = inspect.getsourcelines(frame)
+        current_line = frame.f_lineno - start_line
+        lines = []
+        base_indent = None
+        for line in src[current_line:]:
+            stripped = line.lstrip()
+            if not stripped or stripped.startswith("#"): continue
+            indent = len(line) - len(line.lstrip())
+            if base_indent is None: base_indent = indent
+            elif indent < base_indent: break
+            lines.append(line)
+        if lines[0].startswith("with"): lines = lines[1:]
+        code = "".join((line[base_indent:] for line in lines))
+        if not hasattr(self, "ufcid"):
+            with self.lock: self.ufcid = f"{get_ident()}@{uuid4()}"
+            payload = {"type":7,"ufcid":self.ufcid,"code":code}
+            tree = ast.parse(code)
+            #classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
+            local_env = {}
+            funcs = []
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    _register_pyjinn_function(node.name, ast.unparse(node), False, ())
+                    exec(f"@static_decorate(\"{node.name}\",True,False)\ndef {node.name}(*args,**kwargs): pass", globals(), local_env)
+                    funcs.append(node.name)
+                elif isinstance(node, ast.AsyncFunctionDef):
+                    _register_pyjinn_function(node.name, ast.unparse(node), True, ())
+                    exec(f"@static_decorate(\"{node.name}\",True,True)\ndef {node.name}(*args,**kwargs): pass", globals(), local_env)
+                    funcs.append(node.name)
+            for func_name in funcs: setattr(builtins, func_name, local_env[func_name])
+        else: payload = {"type":8,"ufcid":self.ufcid}
+        writer.write(json.dumps(payload, separators=(",", ":"))+"\n")
+        writer.flush()
+        def burn(frame, event, arg):
+            if event == 'line': raise PyjinnContextLeave
+            return burn
+        sys.settrace(burn)
+        frame.f_trace = burn
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with self.lock: self.depth -= 1
+        if exc_type is PyjinnContextLeave: return True
+        return False
+
 def add_event_listener(event,func):
     payload = json.dumps({"type":4,"event":event,"name":func.__name__,"async":func.is_async}, separators=(",", ":"))
     writer.write(payload + "\n")
@@ -46,8 +118,7 @@ def register_python_function(func):
     return func
 
 def _register_pyjinn_function(name,src,is_async,include):
-    payload = json.dumps({"type":0,"name":name,"code":src,"async":is_async,"include":include}, separators=(",", ":"))
-    writer.write(payload+"\n")
+    writer.write(json.dumps({"type":0,"name":name,"code":src,"async":is_async,"include":include}, separators=(",", ":"))+"\n")
     writer.flush()
 
 def call_function(name,is_async,returns,args,kwargs):
@@ -66,6 +137,19 @@ def call_function(name,is_async,returns,args,kwargs):
 def has_return(node):
     if isinstance(node, ast.Return): return True
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)) and node: return False
+
+def static_decorate(name, returns, is_async):
+    def decorate(func):
+        func.Jynnton_ID = str(uuid4())
+        func.returns = returns
+        func.name = name
+        func.is_async = is_async
+        @wraps(func)
+        def wrapper(*args,**kwargs):
+            return call_function(func.name,func.is_async,func.returns,args,kwargs)
+        return wrapper
+    return decorate
+setattr(builtins, "static_decorate", static_decorate)
 
 def as_pyjinn(*include:list[JynntonFlags]):
     if len(include) > 1:
@@ -152,6 +236,7 @@ cached_java_objects = []
 common_includables = {
     "mc":'mc = JavaClass("net.minecraft.client.Minecraft").getInstance()'
 }
+cached_scripts = {}
 
 def rebind_method(method,context=__script__.mainModule().globals()):
     return BoundFunction(method.functionDef(), context, method.defaults(), method.keywordDefaults(), method.code(), method.isCtor(), method.zombieCounter())
@@ -179,19 +264,31 @@ def rebind_class(_class,context=__script__.mainModule().globals()):
         ctor = CtorFunction(pcc.newInstance(as_array([name])), __init__)
         return PyjClass(name, ctor, isFrozen, new_instanceMethods, newClassLevelMethods, hashMethod, strMethod)
 
-def exec(code):
-    script = Minescript.loadPyjinnScript(JavaList(["__exec__"]), code)
-    script.redirectStdout(__script__.stdout)
-    script.redirectStderr(__script__.stderr)
-    for name in __script__.vars.keys():
-        script.vars[name] = __script__.vars[name]
-    script.exec()
-    for key, value in script.mainModule().globals().vars().items():
-        if key not in builtins:
-            if isinstance(value,BoundFunction): __script__.mainModule().globals().setBoundFunction(rebind_method(script.mainModule().globals().get(key)))
-            elif isinstance(value,PyjClass): __script__.mainModule().globals().set(key, rebind_class(script.mainModule().globals().get(key)))
-            else: __script__.mainModule().globals().set(key,value)
-    script.exit(0)
+class CodeScript:
+    def __init__(self, code):
+        self.code = code
+        log(f"[Jynnton] Compiling src: \n{code}")
+        script = Minescript.loadPyjinnScript(JavaList(["__exec__"]), code)
+        script.redirectStdout(__script__.stdout)
+        script.redirectStderr(__script__.stderr)
+        for name in __script__.vars.keys():
+            script.vars[name] = __script__.vars[name]
+        self.script = script
+    
+    def run(self):
+        log(f"[Jynnton] Adding code to glopal space:\n{self.code}")
+        self.script.exec()
+        for key, value in self.script.mainModule().globals().vars().items():
+            if key not in builtins:
+                if isinstance(value,BoundFunction): __script__.mainModule().globals().setBoundFunction(rebind_method(self.script.mainModule().globals().get(key)))
+                elif isinstance(value,PyjClass): __script__.mainModule().globals().set(key, rebind_class(self.script.mainModule().globals().get(key)))
+                else: __script__.mainModule().globals().set(key,value)
+        #self.script.exit(0)
+
+def exec(code, run=True):
+    script = CodeScript(code)
+    if run: script.run()
+    return script
 
 def return_call(data):
     writer.write(json.dumps(data)+"\n")
@@ -204,6 +301,7 @@ async def run_async_function(name,ufcid,returns,args,kwargs):
     else: return_call({"ufcid":-1,"result":result,"fail":fail})
 
 def _main(_):
+    global cached_scripts
     lines = []
     iters = 0
     while True:
@@ -226,7 +324,6 @@ def _main(_):
                     cached_java_objects.append(val)
                     if typ == "common": code += f"\n{common_includables[val]}"
                     elif typ == "class": code += f'\n{val.split(".")[-1]} = JavaClass("{val}")'
-            log(f"[Jynnton] Adding code to glopal space:\n{code}")
             exec(code)
         elif payload["type"] == 1: # Function call -> {"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":args,"kwargs":kwargs}
             name = payload["name"]
@@ -259,8 +356,13 @@ async def ''' + func + '''(*args,**kwargs):
             else: add_event_listener(payload["event"],__script__.mainModule().globals().get(payload["name"]))
         elif payload["type"] == 5: # javaclass register -> {"type":5,"class":_class,"name":name if name is not None else _class.split(".")[-1].split("$")[-1]}
             exec(f'{payload["name"]} = JavaClass("{payload["class"]}")')
-        elif payload["type"] == 6: # ace -> {"type":6,"code":code}
+        elif payload["type"] == 6: # plain ace -> {"type":6,"code":code}
             exec(payload["code"])
+        elif payload["type"] == 7: # uncached ace
+            cached_scripts[payload["ufcid"]] = exec(payload["code"],False)
+            cached_scripts[payload["ufcid"]].run()
+        elif payload["type"] == 8: # cached ace
+            cached_scripts[payload["ufcid"]].run()
 
 __atexit_register__(lambda: return_call({"ufcid":-2}))
 
@@ -292,3 +394,4 @@ def __reader__():
                 writer.flush()
 
 Thread(target=__reader__,daemon=True).start()
+Thread(target=lambda: sleep(1), daemon=True).start()
