@@ -28,23 +28,29 @@ Example usage:
 
 This will render a cube at the block you are looking at
 ```py
-from Jynnton import as_pyjinn, add_event_listener, JavaClass, JynntonCommons
+from Jynnton import Pyjinn, JavaClass, add_event_listener
 from time import sleep
 
-BlockHitResult = JavaClass("net.minecraft.world.phys.BlockHitResult")
-Gizmos = JavaClass("net.minecraft.gizmos.Gizmos")
-ARGB = JavaClass("net.minecraft.util.ARGB")
-BlockPos = JavaClass("net.minecraft.core.BlockPos")
-GizmoStyle = JavaClass("net.minecraft.gizmos.GizmoStyle")
-mc = JynntonCommons.mc
+pyj = Pyjinn()
 
-@as_pyjinn()
-def render(event):
-    hit = mc.hitResult
-    if hit:
-        if hit.getType() == BlockHitResult.Type.BLOCK:
-            Gizmos.cuboid(BlockPos(hit.getBlockPos()),GizmoStyle.stroke(ARGB.color(255,200,100,200))).setAlwaysOnTop()
-add_event_listener("render",render)
+with pyj:
+    BlockHitResult = JavaClass("net.minecraft.world.phys.BlockHitResult")
+    Gizmos = JavaClass("net.minecraft.gizmos.Gizmos")
+    ARGB = JavaClass("net.minecraft.util.ARGB")
+    BlockPos = JavaClass("net.minecraft.core.BlockPos")
+    GizmoStyle = JavaClass("net.minecraft.gizmos.GizmoStyle")
+    mc = JavaClass("net.minecraft.client.Minecraft").getInstance()
+
+    def render(event):
+        hit = mc.hitResult
+        if hit:
+            if hit.getType() == BlockHitResult.Type.BLOCK:
+                Gizmos.cuboid(BlockPos(hit.getBlockPos()),GizmoStyle.stroke(ARGB.color(255,200,100,200))).setAlwaysOnTop()
+    
+    add_event_listener("render",render)
+
+    def foo():
+        print("Bar")
 
 while True: sleep(1)
 ```
