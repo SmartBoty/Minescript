@@ -58,6 +58,7 @@ class JynntonFlags:
 
 class PyjinnContextLeave(Exception): pass
 class InvalidPyjinnAccessError(Exception): pass
+class DummyObject: pass
 
 class Pyjinn:
     def __init__(self):
@@ -77,6 +78,7 @@ class Pyjinn:
             else: raise InvalidPyjinnAccessError("Cannot reuse the same Pyjinn context manager!")
         if not self.id:
             self.id = f"{get_ident()}@{uuid4()}"
+            debug_log(f"Entering uncached Pyjinn context: {self.id}")
             lines = []
             base_indent = None
             for line in src[current_line:]:
@@ -103,7 +105,9 @@ class Pyjinn:
                     exec(f"@static_decorate(\"{node.name}\",True,True)\ndef {node.name}(*args,**kwargs): pass", globals(), local_env)
                     funcs.append(node.name)
             for func_name in funcs: setattr(builtins, func_name, local_env[func_name])
-        else: payload = {"type":8,"id":self.id,"ufcid":ufcid}
+        else:
+            debug_log(f"Entering cached Pyjinn context: {self.id}")
+            payload = {"type":8,"id":self.id,"ufcid":ufcid}
         writer.write(json.dumps(payload, separators=(",", ":"))+"\n")
         writer.flush()
         concurrent[ufcid] = self.future
@@ -119,17 +123,20 @@ class Pyjinn:
         if exc_type is PyjinnContextLeave:
             payload = self.future.result()["payload"]
             for key, value in payload.items():
-                JynntonGlobals.skip = True
-                if key not in JynntonGlobals.names:
+                _jynnton_globals.skip = True
+                if key not in _jynnton_globals.names:
+                    debug_log(f"Adding field '{key}' from __exit__")
                     JynntonGlobals.add_field(key,value)
                 else:
+                    debug_log(f"Setting field {key} to {value} from __exit__")
                     setattr(JynntonGlobals,key,value)
+            debug_log(f"Returning from Pyjinn context: {self.id}, updated: {list(payload.keys())}")
             return True
         return False
 
 class DynamicField:
     def __init__(self, name, value):
-        debug_log(f"Adding field {name}")
+        debug_log(f"Adding field '{name}' from __init__")
         self.name = name
         self.value = value
 
@@ -143,8 +150,8 @@ class DynamicField:
         payload = future.result()["payload"]
         debug_log(f"Payload: '{payload}' from __get__")
         for key, value in payload.items():
-            instance.skip = True
-            if key not in instance.names:
+            _jynnton_globals.skip = True
+            if key not in _jynnton_globals.names:
                 debug_log(f"Adding field '{key}' from __get__")
                 instance.add_field(key,value)
             else:
@@ -155,23 +162,24 @@ class DynamicField:
 
     def __set__(self, instance, value):
         debug_log(f"Setting detected for '{self.name}' from __set__")
-        if instance.skip:
+        if _jynnton_globals.skip:
             debug_log(f"Skipped setting '{self.name}' in pyjinn from __set__")
-            instance.skip = False
+            _jynnton_globals.skip = False
         else:
             debug_log(f"Setting '{self.name}' in pyjinn from __set__")
             writer.write(json.dumps({"type":9,"name":self.name,"value":value},separators=(",", ":"))+"\n")
             writer.flush()
         instance.__dict__[self.name] = value
 
+_jynnton_globals = DummyObject()
 class _JynntonGlobals:
     def __init__(self):
-        self.names = []
-        self.skip = False
+        _jynnton_globals.names = []
+        _jynnton_globals.skip = False
 
     def add_field(self,key,value):
         debug_log(f"Adding field {key} as {value} from add_field")
-        self.names.append(key)
+        _jynnton_globals.names.append(key)
         setattr(_JynntonGlobals, key, DynamicField(key,value))
 
     def __getattr__(self, name) -> _JynntonGlobals:
@@ -183,14 +191,22 @@ class _JynntonGlobals:
             writer.flush()
             payload = future.result()["payload"]
             for key, value in payload.items():
-                JynntonGlobals.skip = True
-                if key not in JynntonGlobals.names:
+                _jynnton_globals.skip = True
+                if key not in _jynnton_globals.names:
                     JynntonGlobals.add_field(key,value)
                 else: setattr(JynntonGlobals,key,value)
             self.__dict__[name] = payload[name]
             return payload[name]
 
-JynntonGlobals = _JynntonGlobals()
+    def __setattr__(self, name, value):
+        if not name.startswith("__"):
+            setattr(_JynntonGlobals, name, DynamicField(name,value))
+            ufcid = f"{get_ident()}@{uuid4()}"
+            writer.write(json.dumps({"type":9,"name":name,"value":value,"ufcid":ufcid},separators=(",", ":"))+"\n")
+            writer.flush()
+            future = Future()
+            concurrent[ufcid] = future
+            future.result()
 
 def add_event_listener(event,func):
     payload = json.dumps({"type":4,"event":event,"name":func.__name__,"async":func.is_async}, separators=(",", ":"))
@@ -211,6 +227,7 @@ def _register_pyjinn_function(name,src,is_async,include):
     writer.flush()
 
 def call_function(name,is_async,returns,args,kwargs):
+    debug_log(f"Calling '{name}' with: {args} {kwargs}")
     if returns: ufcid = f"{get_ident()}@{uuid4()}"
     else: ufcid = -1
     payload = json.dumps({"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":args,"kwargs":kwargs}, separators=(",", ":"))
@@ -220,6 +237,7 @@ def call_function(name,is_async,returns,args,kwargs):
         future = Future()
         concurrent[ufcid] = future
         payload = future.result()
+        debug_log(f"Returning from '{name}' with {payload["result"]}")
         if payload["fail"]: raise Exception(payload["result"])
         else: return payload["result"]
 
@@ -306,7 +324,7 @@ def as_array(items,specific_type=Object):
         Array.set(array, i, arg)
     return array
 
-def __init__(self): return self
+def __init__(self,*_): return self
 
 log("[Jynnton] Waking up ...")
 bridge = Socket("127.0.0.1", """ + str(port) + r""")
@@ -314,7 +332,6 @@ bridge.setSoTimeout(1)
 writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
 reader = BufferedReader(InputStreamReader(bridge.getInputStream(), StandardCharsets.UTF_8))
 portid = "Jynnton_globals:" + str(""" + str(port) + r""")
-builtins = [reflect_field(builtin,"name") for builtin in reflect_field(__script__.mainModule().globals(),"BUILTINS")] + ["__has_explicit_Minescript_import__","set_chat_input","player_hand_items","get_block","echo","player_press_drop","player_press_forward","player_press_sneak","getblock","_SleepRequest","__script__","ManagedCallback","player_inventory_select_slot","getblocklist","screen_name","player_name","player_orientation","get_entities","_System","Script","add_event_listener","BlockPacker","player_get_targeted_entity","players","player_press_left","get_player","execute","get_block_region","echo_json","player_press_attack","__name__","set_interval","append_chat_history","player_get_targeted_block","container_get_items","log","job_info","_EventRequest","show_chat_screen","screenshot","sys","player_press_jump","player_press_backward","player_set_orientation","chat_input","player_position","BlockPack","player_press_pick_item","_Coroutine","Minescript","BlockRegion","player","player_press_sprint","player_press_right","remove_event_listener","player_inventory","player_look_at","player_press_swap_hands","version_info","get_players","Rotation","Rotations","get_block_list","combine_rotations","set_timeout","EventLoop","press_key_bind","entities","chat","player_health","_RuntimeException","world_info","player_press_use"]
 pcc = type(PyjClassContainer).getDeclaredConstructor(as_array(["".getClass()],Class))
 pcc.setAccessible(True)
 if "Jynnton" not in __script__.vars["game"]: __script__.vars["game"]["Jynnton"] = {}
@@ -362,14 +379,16 @@ class CodeScript:
         self.script = Minescript.loadPyjinnScript(JavaList(["__exec__"]), code)
         self.script.redirectStdout(__script__.stdout)
         self.script.redirectStderr(__script__.stderr)
+        for name in __script__.vars.keys(): self.script.vars[name] = __script__.vars[name]
         for key, value in __script__.mainModule().globals().vars().items():
-            self.script.mainModule().globals().set(key, value)
+            if key not in base_builtins or key == "JynntonGlobals":
+                self.script.mainModule().globals().set(key,value)
     
     def run(self):
         log(f"[Jynnton] Adding code to glopal space:\n{self.code}")
         self.script.exec()
         for key, value in self.script.mainModule().globals().vars().items():
-            if key not in builtins:
+            if key not in base_builtins or key == "JynntonGlobals":
                 if isinstance(value,BoundFunction): __script__.mainModule().globals().setBoundFunction(rebind_method(self.script.mainModule().globals().get(key)))
                 elif isinstance(value,PyjClass): __script__.mainModule().globals().set(key, rebind_class(self.script.mainModule().globals().get(key)))
                 else: __script__.mainModule().globals().set(key,value)
@@ -457,11 +476,13 @@ async def ''' + func + '''(*args,**kwargs):
             return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
         elif payload["type"] == 9: # set global
             JynntonGlobals.__dict__[payload["name"]] = payload["value"]
+            return_call({"ufcid":payload["ufcid"]})
         elif payload["type"] == 10: # Sync globals
             return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
 
 __atexit_register__(lambda: return_call({"ufcid":-2}))
 
+base_builtins = ["builtins"] + list(__script__.mainModule().globals().vars().keys()) + [reflect_field(builtin,"name") for builtin in reflect_field(__script__.mainModule().globals(),"BUILTINS")] + ["__has_explicit_Minescript_import__","set_chat_input","player_hand_items","get_block","echo","player_press_drop","player_press_forward","player_press_sneak","getblock","_SleepRequest","__script__","ManagedCallback","player_inventory_select_slot","getblocklist","screen_name","player_name","player_orientation","get_entities","_System","Script","add_event_listener","BlockPacker","player_get_targeted_entity","players","player_press_left","get_player","execute","get_block_region","echo_json","player_press_attack","__name__","set_interval","append_chat_history","player_get_targeted_block","container_get_items","log","job_info","_EventRequest","show_chat_screen","screenshot","sys","player_press_jump","player_press_backward","player_set_orientation","chat_input","player_position","BlockPack","player_press_pick_item","_Coroutine","Minescript","BlockRegion","player","player_press_sprint","player_press_right","remove_event_listener","player_inventory","player_look_at","player_press_swap_hands","version_info","get_players","Rotation","Rotations","get_block_list","combine_rotations","set_timeout","EventLoop","press_key_bind","entities","chat","player_health","_RuntimeException","world_info","player_press_use"]
 log("[Jynnton] Starting main loop")
 add_event_listener("render",_main)
 """)
@@ -469,6 +490,8 @@ add_event_listener("render",_main)
 conn, _ = bridge.accept()
 reader = conn.makefile("r", encoding="utf-8")
 writer = conn.makefile("w", encoding="utf-8")
+
+JynntonGlobals = _JynntonGlobals()
 
 def __reader__():
     while True:
