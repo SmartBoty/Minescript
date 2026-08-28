@@ -12,7 +12,6 @@ import sys
 import os
 from time import sleep
 import builtins
-from typing import TYPE_CHECKING
 from system.lib.minescript import log, echo
 
 debug_level = 0
@@ -42,10 +41,11 @@ class JavaClass(JavaObj):
     def __init__(self, _class, name=None):
         self._class = _class
         writer.write(json.dumps({"type":5,"class":_class,"name":name if name is not None else _class.split(".")[-1].split("$")[-1]}, separators=(",", ":"))+"\n")
+        writer.flush()
 
 class JynntonCommonsMeta(type):
     @property
-    def mc(cls):
+    def mc(self):
         code = 'mc = JavaClass("net.minecraft.client.Minecraft").getInstance()'
         writer.write(json.dumps({"type": 6, "code": code}, separators=(",", ":"))+"\n")
 
@@ -79,7 +79,7 @@ class Pyjinn:
             base_indent = None
             for line in src[current_line:]:
                 stripped = line.lstrip()
-                if not stripped or stripped.startswith("#"): continue
+                if not stripped or stripped.startswith("#") or stripped.startswith("with"): continue
                 indent = len(line) - len(line.lstrip())
                 if base_indent is None: base_indent = indent
                 elif indent < base_indent: break
@@ -173,7 +173,7 @@ class _JynntonGlobals:
         self.names.append(key)
         setattr(_JynntonGlobals, key, DynamicField(key,value))
 
-    def __getattr__(self, name):
+    def __getattr__(self, name) -> _JynntonGlobals:
         if not name.startswith("__"):
             ufcid = f"{get_ident()}@{uuid4()}"
             future = Future()
@@ -372,7 +372,7 @@ class CodeScript:
                 if isinstance(value,BoundFunction): __script__.mainModule().globals().setBoundFunction(rebind_method(self.script.mainModule().globals().get(key)))
                 elif isinstance(value,PyjClass): __script__.mainModule().globals().set(key, rebind_class(self.script.mainModule().globals().get(key)))
                 else: __script__.mainModule().globals().set(key,value)
-        #self.script.exit(0)
+        self.script.exit(0)
 
 def exec(code, run=True):
     script = CodeScript(code)
@@ -490,8 +490,3 @@ def __reader__():
 
 Thread(target=__reader__,daemon=True).start()
 Thread(target=lambda: sleep(1), daemon=False).start()
-
-if TYPE_CHECKING:
-    class _JynntonGlobals:
-        def __getattr__(self, name) -> _JynntonGlobals: pass
-    JynntonGlobals = _JynntonGlobals()
