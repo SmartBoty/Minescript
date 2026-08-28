@@ -12,6 +12,14 @@ import sys
 import os
 from time import sleep
 import builtins
+from typing import TYPE_CHECKING
+from system.lib.minescript import log, echo
+
+debug_level = 0
+def debug_log(*msg,level=0):
+    if (level <= debug_level or debug_level >= 9) and debug_level:
+        op = log if debug_level < 9 else echo
+        op(" ".join(msg))
 
 concurrent = {}
 registered_python_functions = {}
@@ -49,13 +57,14 @@ class JynntonFlags:
     def JavaClass(_class): return f"class@{_class}"
 
 class PyjinnContextLeave(Exception): pass
-class ConcurrentPyjinnAccessError(Exception): pass
+class InvalidPyjinnAccessError(Exception): pass
 
 class Pyjinn:
     def __init__(self):
         self.lock = Lock()
         self.initialized = False
         self.ufcid = None
+        self.future = Future()
     
     def __enter__(self, *_, **__):
         frame = inspect.currentframe().f_back
@@ -64,7 +73,7 @@ class Pyjinn:
         with self.lock:
             if self.initialized is False or self.initialized == current_line:
                 self.initialized = current_line
-            else: raise ConcurrentPyjinnAccessError("Cannot reuse the same Pyjinn context manager!")
+            else: raise InvalidPyjinnAccessError("Cannot reuse the same Pyjinn context manager!")
         if not self.ufcid:
             lines = []
             base_indent = None
@@ -96,6 +105,7 @@ class Pyjinn:
         else: payload = {"type":8,"ufcid":self.ufcid}
         writer.write(json.dumps(payload, separators=(",", ":"))+"\n")
         writer.flush()
+        concurrent[self.ufcid] = self.future
         def burn(frame, event, arg):
             if event == 'line': raise PyjinnContextLeave
             return burn
@@ -104,8 +114,82 @@ class Pyjinn:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is PyjinnContextLeave: return True
+        sys.settrace(None)
+        if exc_type is PyjinnContextLeave:
+            payload = self.future.result()["payload"]
+            for key, value in payload.items():
+                JynntonGlobals.skip = True
+                if key not in JynntonGlobals.names:
+                    JynntonGlobals.add_field(key,value)
+                else:
+                    setattr(JynntonGlobals,key,value)
+            return True
         return False
+
+class DynamicField:
+    def __init__(self, name, value):
+        debug_log(f"Adding field {name}")
+        self.name = name
+        self.value = value
+
+    def __get__(self, instance, owner):
+        debug_log(f"Grabbing '{self.name}'  from __get__")
+        ufcid = f"{get_ident()}@{uuid4()}"
+        future = Future()
+        concurrent[ufcid] = future
+        writer.write(json.dumps({"type":10,"ufcid":ufcid},separators=(",", ":"))+"\n")
+        writer.flush()
+        payload = future.result()["payload"]
+        debug_log(f"Payload: '{payload}' from __get__")
+        for key, value in payload.items():
+            instance.skip = True
+            if key not in instance.names:
+                debug_log(f"Adding field '{key}' from __get__")
+                instance.add_field(key,value)
+            else:
+                debug_log(f"Setting field {key} to {value} from __get__")
+                setattr(instance,key,value)
+        instance.__dict__[self.name] = payload[self.name]
+        return payload[self.name]
+
+    def __set__(self, instance, value):
+        debug_log(f"Setting detected for '{self.name}' from __set__")
+        if instance.skip:
+            debug_log(f"Skipped setting '{self.name}' in pyjinn from __set__")
+            instance.skip = False
+        else:
+            debug_log(f"Setting '{self.name}' in pyjinn from __set__")
+            writer.write(json.dumps({"type":9,"name":self.name,"value":value},separators=(",", ":"))+"\n")
+            writer.flush()
+        instance.__dict__[self.name] = value
+
+class _JynntonGlobals:
+    def __init__(self):
+        self.names = []
+        self.skip = False
+
+    def add_field(self,key,value):
+        debug_log(f"Adding field {key} as {value} from add_field")
+        self.names.append(key)
+        setattr(_JynntonGlobals, key, DynamicField(key,value))
+
+    def __getattr__(self, name):
+        if not name.startswith("__"):
+            ufcid = f"{get_ident()}@{uuid4()}"
+            future = Future()
+            concurrent[ufcid] = future
+            writer.write(json.dumps({"type":10,"ufcid":ufcid},separators=(",", ":"))+"\n")
+            writer.flush()
+            payload = future.result()["payload"]
+            for key, value in payload.items():
+                JynntonGlobals.skip = True
+                if key not in JynntonGlobals.names:
+                    JynntonGlobals.add_field(key,value)
+                else: setattr(JynntonGlobals,key,value)
+            self.__dict__[name] = payload[name]
+            return payload[name]
+
+JynntonGlobals = _JynntonGlobals()
 
 def add_event_listener(event,func):
     payload = json.dumps({"type":4,"event":event,"name":func.__name__,"async":func.is_async}, separators=(",", ":"))
@@ -241,6 +325,8 @@ common_includables = {
     "mc":'mc = JavaClass("net.minecraft.client.Minecraft").getInstance()'
 }
 cached_scripts = {}
+class _JG: pass
+JynntonGlobals = _JG()
 
 def rebind_method(method,context=__script__.mainModule().globals()):
     return BoundFunction(method.functionDef(), context, method.defaults(), method.keywordDefaults(), method.code(), method.isCtor(), method.zombieCounter())
@@ -272,12 +358,11 @@ class CodeScript:
     def __init__(self, code):
         self.code = code
         log(f"[Jynnton] Compiling src: \n{code}")
-        script = Minescript.loadPyjinnScript(JavaList(["__exec__"]), code)
-        script.redirectStdout(__script__.stdout)
-        script.redirectStderr(__script__.stderr)
-        for name in __script__.vars.keys():
-            script.vars[name] = __script__.vars[name]
-        self.script = script
+        self.script = Minescript.loadPyjinnScript(JavaList(["__exec__"]), code)
+        self.script.redirectStdout(__script__.stdout)
+        self.script.redirectStderr(__script__.stderr)
+        for key, value in __script__.mainModule().globals().vars().items():
+            self.script.mainModule().globals().set(key, value)
     
     def run(self):
         log(f"[Jynnton] Adding code to glopal space:\n{self.code}")
@@ -305,7 +390,7 @@ async def run_async_function(name,ufcid,returns,args,kwargs):
     else: return_call({"ufcid":-1,"result":result,"fail":fail})
 
 def _main(_):
-    global cached_scripts
+    global cached_scripts, JynntonGlobals
     lines = []
     iters = 0
     while True:
@@ -365,8 +450,14 @@ async def ''' + func + '''(*args,**kwargs):
         elif payload["type"] == 7: # uncached ace
             cached_scripts[payload["ufcid"]] = exec(payload["code"],False)
             cached_scripts[payload["ufcid"]].run()
+            return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
         elif payload["type"] == 8: # cached ace
             cached_scripts[payload["ufcid"]].run()
+            return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
+        elif payload["type"] == 9: # set global
+            JynntonGlobals.__dict__[payload["name"]] = payload["value"]
+        elif payload["type"] == 10: # Sync globals
+            return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
 
 __atexit_register__(lambda: return_call({"ufcid":-2}))
 
@@ -398,4 +489,9 @@ def __reader__():
                 writer.flush()
 
 Thread(target=__reader__,daemon=True).start()
-Thread(target=lambda: sleep(1), daemon=True).start()
+Thread(target=lambda: sleep(1), daemon=False).start()
+
+if TYPE_CHECKING:
+    class _JynntonGlobals:
+        def __getattr__(self, name) -> _JynntonGlobals: pass
+    JynntonGlobals = _JynntonGlobals()
