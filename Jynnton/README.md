@@ -28,7 +28,7 @@ with pyj:
 ```
 Upon calling `foo()` or `bar()`, the function will now be called in Pyjinn
 
-Example usage:
+Example usages:
 
 This will render a cube at the block you are looking at
 ```py
@@ -58,4 +58,20 @@ with pyj:
 
 while True: sleep(1)
 ```
+Cover your ears!
+```py
+from Jynnton import Pyjinn, JavaClass
+
+pyj = Pyjinn()
+
+with pyj:
+  mc = JavaClass("net.minecraft.client.Minecraft").getInstance()
+  SoundEvents = JavaClass("net.minecraft.sounds.SoundEvents")
+  def play_sound():
+    mc.player.playSound(SoundEvents.ANVIL_LAND, 2.0, 0.7)
+
+while True:
+  play_sound()
+```
+
 Ps: im really sorry for those who want to rewiew the code. Ping me if you need something specific*!*
