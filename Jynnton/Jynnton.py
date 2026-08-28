@@ -63,10 +63,11 @@ class Pyjinn:
     def __init__(self):
         self.lock = Lock()
         self.initialized = False
-        self.ufcid = None
-        self.future = Future()
+        self.id = None
     
     def __enter__(self, *_, **__):
+        ufcid = f"{get_ident()}@{uuid4()}"
+        self.future = Future()
         frame = inspect.currentframe().f_back
         src, start_line = inspect.getsourcelines(frame)
         current_line = frame.f_lineno - start_line
@@ -74,7 +75,8 @@ class Pyjinn:
             if self.initialized is False or self.initialized == current_line:
                 self.initialized = current_line
             else: raise InvalidPyjinnAccessError("Cannot reuse the same Pyjinn context manager!")
-        if not self.ufcid:
+        if not self.id:
+            self.id = f"{get_ident()}@{uuid4()}"
             lines = []
             base_indent = None
             for line in src[current_line:]:
@@ -86,8 +88,7 @@ class Pyjinn:
                 lines.append(line)
             if lines[0].startswith("with"): lines = lines[1:]
             code = "".join((line[base_indent:] for line in lines))
-            with self.lock: self.ufcid = f"{get_ident()}@{uuid4()}"
-            payload = {"type":7,"ufcid":self.ufcid,"code":code}
+            payload = {"type":7,"id":self.id,"ufcid":ufcid,"code":code}
             tree = ast.parse(code)
             #classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
             local_env = {}
@@ -102,10 +103,10 @@ class Pyjinn:
                     exec(f"@static_decorate(\"{node.name}\",True,True)\ndef {node.name}(*args,**kwargs): pass", globals(), local_env)
                     funcs.append(node.name)
             for func_name in funcs: setattr(builtins, func_name, local_env[func_name])
-        else: payload = {"type":8,"ufcid":self.ufcid}
+        else: payload = {"type":8,"id":self.id,"ufcid":ufcid}
         writer.write(json.dumps(payload, separators=(",", ":"))+"\n")
         writer.flush()
-        concurrent[self.ufcid] = self.future
+        concurrent[ufcid] = self.future
         def burn(frame, event, arg):
             if event == 'line': raise PyjinnContextLeave
             return burn
@@ -448,11 +449,11 @@ async def ''' + func + '''(*args,**kwargs):
         elif payload["type"] == 6: # plain ace -> {"type":6,"code":code}
             exec(payload["code"])
         elif payload["type"] == 7: # uncached ace
-            cached_scripts[payload["ufcid"]] = exec(payload["code"],False)
-            cached_scripts[payload["ufcid"]].run()
+            cached_scripts[payload["id"]] = exec(payload["code"],False)
+            cached_scripts[payload["id"]].run()
             return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
         elif payload["type"] == 8: # cached ace
-            cached_scripts[payload["ufcid"]].run()
+            cached_scripts[payload["id"]].run()
             return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
         elif payload["type"] == 9: # set global
             JynntonGlobals.__dict__[payload["name"]] = payload["value"]
