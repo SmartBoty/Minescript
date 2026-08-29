@@ -50,11 +50,8 @@ with pyj:
         if hit:
             if hit.getType() == BlockHitResult.Type.BLOCK:
                 Gizmos.cuboid(BlockPos(hit.getBlockPos()),GizmoStyle.stroke(ARGB.color(255,200,100,200))).setAlwaysOnTop()
-    
-    add_event_listener("render",render)
 
-    def foo():
-        print("Bar")
+add_event_listener("render",render)
 
 while True: sleep(1)
 ```
