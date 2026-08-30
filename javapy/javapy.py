@@ -1,7 +1,6 @@
 from __future__ import annotations
 import socket
-from system.lib.java import eval_pyjinn_script as eps, JavaClass as builtin_JavaClass
-from time import sleep
+from system.lib.java import eval_pyjinn_script as eps
 from uuid import uuid4
 from threading import get_ident, Thread
 import json
@@ -30,12 +29,14 @@ def run_call(data:dict):
     return result
 
 def request_object(uuid) -> JavaObject:
+    debug_log(f"Requesting object: {uuid}")
     ufcid = next_ufcid()
     result = run_call({"ufcid":ufcid,"type":4,"uuid":uuid})
     if not result["java_type"]: return result["value"]
     else: return JavaObject(result["id"],result["name"])
 
 def submit_object(obj):
+    debug_log(f"Submitting object: {repr(obj)}")
     ufcid = next_ufcid()
     result = run_call({"ufcid":ufcid,"type":5,"obj_id":js[obj]["id"]})
     return result["uuid"]
@@ -90,7 +91,7 @@ class JavaObject:
         if not result["java_type"]: return result["value"]
         else: return JavaObject(result["id"],result["name"])
 
-    def __getattribute__(self, name:str):
+    def __getattr__(self, name:str):
         return resolve_member(name, self)
 
 class JavaMethod(JavaObject):
@@ -137,6 +138,9 @@ Array = JavaClass("java.lang.reflect.Array")
 Object = JavaClass("java.lang.Object")
 JavaClassType = JavaClass("org.pyjinn.interpreter.JavaClass")
 UUID = JavaClass("java.util.UUID")
+TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
+mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
+Set = JavaClass("java.util.Set")
 
 def as_array(items,specific_type=Object):
     array = Array.newInstance(type(specific_type),len(items))
@@ -147,8 +151,16 @@ def as_array(items,specific_type=Object):
 def as_class_array(items):
     array = Array.newInstance(type(Class),len(items))
     for i, arg in enumerate(items):
+        if isinstance(arg, JavaClassType): arg = type(arg)
+        elif not isinstance(arg, Class): arg = arg.getClass()
         Array.set(array, i, arg)
     return array
+
+def can_jsonify(obj):
+    try: json.dumps(obj)
+    except: return False
+    if isinstance(obj, (type(0),type(""),type(True),type([]))): return True
+    return False
 
 def return_call(data):
     writer.write(json.dumps(data)+"\n")
@@ -160,16 +172,36 @@ def next_id():
     return current_id
 
 def invoke(self,method,args):
+    static = True
     if self.type == "JavaClass": clss = self.obj
     elif isinstance(self.obj, JavaClassType): clss = type(self.obj)
-    else: clss = self.obj.getClass()
-    return JavaObject(clss.getDeclaredMethod(method,as_class_array(args)).invoke(self.obj,as_array(args)))
+    else:
+        clss = self.obj.getClass()
+        static = False
+    classes = as_class_array(args)
+    array_args = as_array(args)
+    m = TypeChecker.findBestMatchingMethod(clss, static, lambda*_:Set.of(method), method, classes, None)
+    if not m.isEmpty():
+        if static: result = m.get().invoke(__script__.mainModule().globals(),clss,array_args)
+        else: result = m.get().invoke(__script__.mainModule().globals(),self.obj,array_args)
+        return JavaObject(result)
+    raise Exception(f"NoSuchMethod: {method}({str(classes)[1:-1]})")
 
 def construct(self,args):
+    static = True
     if self.type == "JavaClass": clss = self.obj
     elif isinstance(self.obj, JavaClassType): clss = type(self.obj)
-    else: clss = self.obj.getClass()
-    return JavaObject(clss.getDeclaredConstructor(as_class_array(args)).newInstance(as_array(args)))
+    else:
+        clss = self.obj.getClass()
+        static = False
+    classes = as_class_array(args)
+    array_args = as_array(args)
+    ctor = TypeChecker.findBestMatchingConstructor(clss, classes, None)
+    if not ctor.isEmpty():
+        if static: result = ctor.get().newInstance(__script__.mainModule().globals(),array_args)
+        else: result = ctor.get().newInstance(__script__.mainModule().globals(),array_args)
+        return JavaObject(result)
+    return JavaObject(clss.getConstructor(as_class_array(args)).newInstance(as_array(args)))
 
 class JavaClassObject:
     def __init__(self, clss):
@@ -221,24 +253,23 @@ def _main(_):
             elif isinstance(obj.obj, JavaClassType): object = type(obj.obj)
             else: object = obj.obj.getClass()
             try:
-                field = object.getDeclaredField(payload["member"]).get(obj.obj)
+                field = object.getField(payload["member"]).get(obj.obj)
                 got_field = True
             except:
                 field = None
                 got_field = False
             got_method = False
-            for method in object.getDeclaredMethods():
+            for method in object.getMethods():
                 if method.getName() == payload["member"]:
                     got_method = True
                     break
             if got_field:
-                try:
-                    json.dumps(field)
+                if can_jsonify(field):
                     java_field = False
                     id = None
                     value = field
                     name = None
-                except:
+                else:
                     java_field = True
                     jo = JavaObject(field)
                     id = jo.id
@@ -247,13 +278,13 @@ def _main(_):
                 return_call({"ufcid":payload["ufcid"],"fail":False,"field":True,"java_field":java_field,"value":value,"id":id,"name":name})
             elif got_method:
                 return_call({"ufcid":payload["ufcid"],"fail":False,"field":False,"java_field":None,"value":None,"id":None,"name":None})
-            else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"NoSuchMemberException: {payload["member"]}"})
+            else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"NoSuchMemberException: {obj.obj} has no member named {payload["member"]}"})
         elif payload["type"] == 2: # method call {"ufcid":ufcid,"type":2,"method":js[self]["name"],"obj_id":js[js[self]["parent"]]["id"],"args":normal_args,"java_args":java_args}
             obj = cached_java_objects[payload["obj_id"]]
             normal_args = payload["args"]
             java_args = payload["java_args"]
             args = []
-            for i in range(len(normal_args)-1):
+            for i in range(len(normal_args)):
                 if normal_args[i] is None:
                     args.append(cached_java_objects[java_args[i]].obj)
                 else: args.append(normal_args[i])
@@ -261,13 +292,13 @@ def _main(_):
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
                 continue
-            try:
+            if can_jsonify(result):
                 json.dumps(result)
                 java_type = False
                 value = result
                 id = None
                 name = None
-            except:
+            else:
                 java_type = True
                 value = None
                 jo = JavaObject(result)
@@ -287,13 +318,12 @@ def _main(_):
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
                 continue
-            try:
-                json.dumps(result)
+            if can_jsonify(result):
                 java_type = False
                 value = result
                 id = None
                 name = None
-            except:
+            else:
                 java_type = True
                 value = None
                 jo = JavaObject(result)
@@ -304,18 +334,17 @@ def _main(_):
             if payload["uuid"] in __script__.vars["game"]["javapy"]:
                 obj = __script__.vars["game"]["javapy"][payload["uuid"]]
                 del __script__.vars["game"]["javapy"][payload["uuid"]]
-                try:
-                    json.dumps(obj)
+                if can_jsonify(obj):
                     java_type = False
                     value = obj
                     id = None
                     name = None
-                except:
+                else:
                     java_type = True
                     value = None
                     jo = JavaObject(obj)
                     id = jo.id
-                    name = str(jo.obj)
+                    name = jo.obj.getClass().getName()
                 return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name})
             else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"KeyError: {payload["uuid"]}"})
         elif payload["type"] == 5: # submit object {"ufcid":ufcid,"type":4,"obj_id":js[obj]["id"]}
