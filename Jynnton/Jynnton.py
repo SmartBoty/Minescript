@@ -21,6 +21,8 @@ def debug_log(*msg,level=0):
         op("[Jynnton] "+" ".join(msg))
 
 try:
+    import javapy as jpy
+    jpy.debug_level = debug_level
     from javapy import request_object, normalize_items, submit_object, JavaObject
     javapy = True
 except:
@@ -317,6 +319,7 @@ CtorFunction = JavaClass("org.pyjinn.interpreter.Script$CtorFunction")
 PyjClassContainer = JavaClass("org.pyjinn.interpreter.Script$PyjClassContainer")
 Class = JavaClass("java.lang.Class")
 Random = JavaClass("java.util.Random")()
+UUID = JavaClass("java.util.UUID")
 
 def reflect_field(_class, field_name, raw=False):
     clss = _class.getClass()
@@ -345,6 +348,7 @@ pcc.setAccessible(True)
 if "Jynnton" not in __script__.vars["game"]: __script__.vars["game"]["Jynnton"] = {}
 __script__.vars["game"]["Jynnton"][portid] = {}
 __script__.vars["game"]["Jynnton"][portid]["returns"] = {}
+javapy = """ + str(javapy) + r"""
 
 cached_java_objects = []
 common_includables = {
@@ -359,7 +363,7 @@ def convert_to_javapy(obj):
         json.dumps(obj)
         return obj, None
     except:
-        if """ + str(javapy) + r""":
+        if javapy:
             uuid = f"{portid}{Random.nextInt()}"
             __script__.vars["game"]["javapy"][uuid] = obj
             return None,uuid
@@ -424,10 +428,16 @@ def return_call(data):
     writer.flush()
 
 async def run_async_function(name,ufcid,returns,args,kwargs):
-    try: result = await __script__.mainModule().globals().get(name)(*args,**kwargs) ; fail = False
-    except Exception as e: result = e.getMessage() ; fail = True
-    if returns: return_call({"ufcid":ufcid,"result":result,"fail":fail})
-    else: return_call({"ufcid":-1,"result":result,"fail":fail})
+    try:
+        result = await __script__.mainModule().globals().get(name)(*args,**kwargs)
+        fail = False
+        try: obj, uuid = convert_to_javapy(result)
+        except Exception as e: return_call({"ufcid":ufcid if returns else -1,"fail":True,"result":e.getMessage()})
+    except Exception as e:
+        obj = e.getMessage()
+        fail = True
+        uuid = None
+    return_call({"ufcid":ufcid if returns else -1,"result":obj,"uuid":uuid,"fail":fail})
 
 def _main(_):
     global cached_scripts, JynntonGlobals
@@ -481,7 +491,23 @@ def _main(_):
 '''
 async def ''' + func + '''(*args,**kwargs):
     ufcid = str(Random.nextInt())
-    return_call({"ufcid":ufcid,"func":"''' + func + '''","args":args,"kwargs":kwargs,"returns": ''' + str(payload["returns"]) + '''})
+    if javapy:
+        normal_args = []
+        java_args = []
+        for i in range(len(args)):
+            try:
+                json.dumps(args[i])
+                normal_args.append(args[i])
+                java_args.append(None)
+            except:
+                uuid = UUID.randomUUID().toString()
+                java_args.append(uuid)
+                normal_args.append(None)
+                __script__.vars["game"]["javapy"][uuid] = args[i]
+    else:
+        normal_args = args
+        java_args = []
+    return_call({"ufcid":ufcid,"func":"''' + func + '''","args":normal_args,"java_args":java_args,"kwargs":kwargs,"returns": ''' + str(payload["returns"]) + '''})
     while ''' + str(payload["returns"]) + ''':
         el = EventLoop()
         await el.sleep(0)
@@ -541,7 +567,16 @@ def __reader__():
                 os._exit(-1)
         elif data["ufcid"] == -2: os._exit(0)
         elif data["ufcid"]:
-            res = registered_python_functions[data["func"]](*data["args"],**data["kwargs"])
+            normal_args = data["args"]
+            java_args = data["java_args"]
+            if javapy:
+                args = []
+                for i in range(len(normal_args)):
+                    if java_args[i] is not None:
+                        args.append(request_object(java_args[i]))
+                    else: args.append(normal_args[i])
+            else: args = normal_args
+            res = registered_python_functions[data["func"]](*args,**data["kwargs"])
             if data["returns"]:
                 writer.write(json.dumps({"type":3,"result":res,"ufcid":data["ufcid"]},separators=(",", ":"))+"\n")
                 writer.flush()
