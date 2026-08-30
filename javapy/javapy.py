@@ -35,6 +35,11 @@ def request_object(uuid) -> JavaObject:
     if not result["java_type"]: return result["value"]
     else: return JavaObject(result["id"],result["name"])
 
+def submit_object(obj):
+    ufcid = next_ufcid()
+    result = run_call({"ufcid":ufcid,"type":5,"obj_id":js[obj]["id"]})
+    return result["uuid"]
+
 def resolve_class(clss:str):
     debug_log(f"Resolving class: {clss}")
     ufcid = next_ufcid()
@@ -131,6 +136,7 @@ Class = JavaClass("java.lang.Class")
 Array = JavaClass("java.lang.reflect.Array")
 Object = JavaClass("java.lang.Object")
 JavaClassType = JavaClass("org.pyjinn.interpreter.JavaClass")
+UUID = JavaClass("java.util.UUID")
 
 def as_array(items,specific_type=Object):
     array = Array.newInstance(type(specific_type),len(items))
@@ -312,6 +318,10 @@ def _main(_):
                     name = str(jo.obj)
                 return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name})
             else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"KeyError: {payload["uuid"]}"})
+        elif payload["type"] == 5: # submit object {"ufcid":ufcid,"type":4,"obj_id":js[obj]["id"]}
+            uuid = UUID.randomUUID().toString()
+            __script__.vars["game"]["javapy"][uuid] = cached_java_objects[payload["obj_id"]]
+            return_call({"ufcid":payload["ufcid"],"fail":False,"uuid":uuid})
 
 
 add_event_listener("render",_main)
