@@ -7,7 +7,7 @@ Requirements:
 - `pyjinn_json`: https://github.com/SmartBoty/Minescript/blob/main/pyjinn/pyjinn_json.py
 - Only tested on version 5.0b11, but may work on other versions aswell
 - Python 3.12 +
-- javapy (Only for java objects): https://github.com/SmartBoty/Minescript/blob/main/javapy/javapy.py
+- javapy (Optional, only for java objects): https://github.com/SmartBoty/Minescript/blob/main/javapy/javapy.py
 
 What this library allows you to do:
 - Execute Pyjinn code, straight from Python
