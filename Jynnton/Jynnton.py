@@ -18,30 +18,21 @@ debug_level = 0
 def debug_log(*msg,level=0):
     if (level <= debug_level or debug_level >= 9) and debug_level:
         op = log if debug_level < 9 else echo
-        op(" ".join(msg))
+        op("[Jynnton] "+" ".join(msg))
+
+try:
+    from javapy import request_object, normalize_items, submit_object, JavaObject
+    javapy = True
+except:
+    debug_log("Warning: javapy.py is not found! Some functions of Jynnton will be disabled",level=1)
+    javapy = False
+
+class JavaClass:
+    def __init__(self, _class): raise InvalidPyjinnAccessError("Jynnton JavaClass is not useable outside pyjinn context!")
 
 concurrent = {}
 registered_python_functions = {}
 cached = []
-
-class JavaObj:
-    def __init__(self, path="", name=""):
-        if path and name: self.__dict__["path"] = f"{path}.{name}"
-        else: self.__dict__["path"] = path or name
-
-    def __getattr__(self, name):
-        if not name.startswith("__") and name.endswith("__"):
-            return JavaObj(self.path, name)
-        return self
-
-    def __call__(self) -> JavaObj:
-        raise AttributeError("Jynnton JavaObj is not callable in python context")
-
-class JavaClass(JavaObj):
-    def __init__(self, _class, name=None):
-        self._class = _class
-        writer.write(json.dumps({"type":5,"class":_class,"name":name if name is not None else _class.split(".")[-1].split("$")[-1]}, separators=(",", ":"))+"\n")
-        writer.flush()
 
 class JynntonCommonsMeta(type):
     @property
@@ -58,6 +49,7 @@ class JynntonFlags:
 
 class PyjinnContextLeave(Exception): pass
 class InvalidPyjinnAccessError(Exception): pass
+class JavaException(Exception): pass
 class DummyObject: pass
 
 class Pyjinn:
@@ -230,7 +222,21 @@ def call_function(name,is_async,returns,args,kwargs):
     debug_log(f"Calling '{name}' with: {args} {kwargs}")
     if returns: ufcid = f"{get_ident()}@{uuid4()}"
     else: ufcid = -1
-    payload = json.dumps({"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":args,"kwargs":kwargs}, separators=(",", ":"))
+    if javapy:
+        normal_args = []
+        java_args = []
+        for item in args:
+            if isinstance(item, JavaObject):
+                normal_args.append(None)
+                java_args.append(submit_object(item))
+            else:
+                normal_args.append(item)
+                java_args.append(None)
+        debug_log(f"Converted args for javapy: {normal_args} {java_args}")
+    else:
+        normal_args = args
+        java_args = []
+    payload = json.dumps({"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":normal_args,"java_args":java_args,"javapy":javapy,"kwargs":kwargs}, separators=(",", ":"))
     writer.write(payload+"\n")
     writer.flush()
     if returns:
@@ -238,8 +244,10 @@ def call_function(name,is_async,returns,args,kwargs):
         concurrent[ufcid] = future
         payload = future.result()
         debug_log(f"Returning from '{name}' with {payload["result"]}")
-        if payload["fail"]: raise Exception(payload["result"])
-        else: return payload["result"]
+        if payload["fail"]: raise JavaException(payload["result"])
+        else:
+            if payload["uuid"]: return request_object(payload["uuid"])
+            else: return payload["result"]
 
 def has_return(node):
     if isinstance(node, ast.Return): return True
@@ -331,7 +339,7 @@ bridge = Socket("127.0.0.1", """ + str(port) + r""")
 bridge.setSoTimeout(1)
 writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
 reader = BufferedReader(InputStreamReader(bridge.getInputStream(), StandardCharsets.UTF_8))
-portid = "Jynnton_globals:" + str(""" + str(port) + r""")
+portid = "Jynnton_globals@" + str(""" + str(port) + r""")
 pcc = type(PyjClassContainer).getDeclaredConstructor(as_array(["".getClass()],Class))
 pcc.setAccessible(True)
 if "Jynnton" not in __script__.vars["game"]: __script__.vars["game"]["Jynnton"] = {}
@@ -345,6 +353,18 @@ common_includables = {
 cached_scripts = {}
 class _JG: pass
 JynntonGlobals = _JG()
+
+def convert_to_javapy(obj):
+    try:
+        json.dumps(obj)
+        return obj, None
+    except:
+        if """ + str(javapy) + r""":
+            uuid = f"{portid}{Random.nextInt()}"
+            __script__.vars["game"]["javapy"][uuid] = obj
+            return None,uuid
+        else:
+            raise Exception("javapy.py is not installed! Cannot convert JavaObject")
 
 def rebind_method(method,context=__script__.mainModule().globals()):
     return BoundFunction(method.functionDef(), context, method.defaults(), method.keywordDefaults(), method.code(), method.isCtor(), method.zombieCounter())
@@ -434,13 +454,27 @@ def _main(_):
                     if typ == "common": code += f"\n{common_includables[val]}"
                     elif typ == "class": code += f'\n{val.split(".")[-1]} = JavaClass("{val}")'
             exec(code)
-        elif payload["type"] == 1: # Function call -> {"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":args,"kwargs":kwargs}
+        elif payload["type"] == 1: # Function call -> {"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":normal_args,"java_args":java_args,"javapy":javapy,"kwargs":kwargs}
             name = payload["name"]
-            if payload["async"]: run = lambda: EventLoop().run(lambda this: run_async_function(name,payload["ufcid"],payload["returns"],payload["args"],payload["kwargs"]))
-            else: run = lambda: __script__.mainModule().globals().get(name)(*payload["args"],**payload["kwargs"])
+            normal_args = payload["args"]
+            java_args = payload["java_args"]
+            if payload["javapy"]:
+                args = []
+                for i in range(len(normal_args)):
+                    if java_args[i] is not None:
+                        obj = __script__.vars["game"]["javapy"][java_args[i]]
+                        del __script__.vars["game"]["javapy"][java_args[i]]
+                        args.append(obj.obj)
+                    else: args.append(normal_args[i])
+            else: args = normal_args
+            if payload["async"]: run = lambda: EventLoop().run(lambda this: run_async_function(name,payload["ufcid"],payload["returns"],args,payload["kwargs"]))
+            else: run = lambda: __script__.mainModule().globals().get(name)(*args,**payload["kwargs"])
             try: result = run() ; fail = False
             except Exception as e: result = e.getMessage() ; fail = True
-            if not payload["async"]: return_call({"ufcid":payload["ufcid"],"result":result,"fail":fail})
+            if not payload["async"]:
+                try: obj, uuid = convert_to_javapy(result)
+                except Exception as e: return_call({"ufcid":payload["ufcid"],"fail":True,"result":e.getMessage()})
+                return_call({"ufcid":payload["ufcid"],"result":obj,"fail":fail,"uuid":uuid})
         elif payload["type"] == 2: # Python function register -> {"type":2,"funcs":out}
             for func in payload["funcs"]:
                 code = (
