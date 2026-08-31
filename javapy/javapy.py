@@ -2,25 +2,31 @@ from __future__ import annotations
 import socket
 from system.lib.java import eval_pyjinn_script as eps
 from uuid import uuid4
-from threading import get_ident, Thread
+from threading import get_ident, Thread, Lock
 import json
 from concurrent.futures import Future
 from system.lib.minescript import log, echo
 from weakref import WeakKeyDictionary
+from time import sleep
+from queue import Queue
 
 concurrent = {}
 js = WeakKeyDictionary()
+garbage_lock = Lock()
+garbage = Queue()
 
 debug_level = 0
 def debug_log(*msg,level=0):
     if (level <= debug_level or debug_level >= 9) and debug_level:
-        op = log if debug_level < 9 else echo
+        op = log if (not debug_level >= 9) or level == debug_level else echo
         op(" ".join(msg))
 
 def next_ufcid(): return f"{get_ident()}@{uuid4()}"
 
+call_lock = Lock()
 def run_call(data:dict):
-    writer.write(json.dumps(data)+"\n")
+    with call_lock:
+        writer.write(json.dumps(data)+"\n")
     writer.flush()
     future = Future()
     concurrent[data["ufcid"]] = future
@@ -91,8 +97,12 @@ class JavaObject:
         if not result["java_type"]: return result["value"]
         else: return JavaObject(result["id"],result["name"])
 
-    def __getattr__(self, name:str):
+    def __getattr__(self, name:str) -> JavaObject:
         return resolve_member(name, self)
+
+    def __del__(self):
+        #echo(f"Garbage collecting: {js[self]["id"]}")
+        garbage.put(js[self]["id"])
 
 class JavaMethod(JavaObject):
     def __init__(self, parent:JavaObject, name:str):
@@ -109,6 +119,8 @@ class JavaMethod(JavaObject):
         result = run_call({"ufcid":ufcid,"type":2,"method":js[self]["name"],"obj_id":js[js[self]["parent"]]["id"],"args":normal_args,"java_args":java_args})
         if not result["java_type"]: return result["value"]
         else: return JavaObject(result["id"],result["name"])
+
+    def __del__(self): pass
 
 class JavaClass(JavaObject):
     def __init__(self, clss):
@@ -184,7 +196,7 @@ def invoke(self,method,args):
     if not m.isEmpty():
         if static: result = m.get().invoke(__script__.mainModule().globals(),clss,array_args)
         else: result = m.get().invoke(__script__.mainModule().globals(),self.obj,array_args)
-        return JavaObject(result)
+        return result
     raise Exception(f"NoSuchMethod: {method}({str(classes)[1:-1]})")
 
 def construct(self,args):
@@ -200,8 +212,8 @@ def construct(self,args):
     if not ctor.isEmpty():
         if static: result = ctor.get().newInstance(__script__.mainModule().globals(),array_args)
         else: result = ctor.get().newInstance(__script__.mainModule().globals(),array_args)
-        return JavaObject(result)
-    return JavaObject(clss.getConstructor(as_class_array(args)).newInstance(as_array(args)))
+        return result
+    return Exception(f"NoSuchConstructor: {str(classes)[1:-1]}")
 
 class JavaClassObject:
     def __init__(self, clss):
@@ -226,6 +238,7 @@ cached_java_objects = {}
 if "javapy" not in __script__.vars["game"]: __script__.vars["game"]["javapy"] = {}
 
 def _main(_):
+    global cached_java_objects
     lines = []
     iters = 0
     while True:
@@ -288,7 +301,7 @@ def _main(_):
                 if normal_args[i] is None:
                     args.append(cached_java_objects[java_args[i]].obj)
                 else: args.append(normal_args[i])
-            try: result = invoke(obj,payload["method"],args).obj
+            try: result = invoke(obj,payload["method"],args)
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
                 continue
@@ -351,7 +364,12 @@ def _main(_):
             uuid = UUID.randomUUID().toString()
             __script__.vars["game"]["javapy"][uuid] = cached_java_objects[payload["obj_id"]]
             return_call({"ufcid":payload["ufcid"],"fail":False,"uuid":uuid})
-
+        elif payload["type"] == 6: # Garbage collection
+            try:
+                del cached_java_objects[payload["id"]]
+                return_call({"ufcid":payload["ufcid"],"fail":False})
+            except Exception as e:
+                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
 
 add_event_listener("render",_main)
 """)
@@ -366,4 +384,12 @@ def __reader__():
         data = json.loads(line)
         if data["ufcid"] in concurrent: concurrent.pop(data["ufcid"]).set_result(data)
 
+def __garbage_collector__():
+    while True:
+        id = garbage.get()
+        debug_log(f"Garbage collecting: {id}")
+        run_call({"ufcid":0,"type":6,"id":id})
+        debug_log(f"Garbage collected: {id}", level=8)
+
 Thread(target=__reader__,daemon=True).start()
+Thread(target=__garbage_collector__,daemon=True).start()
