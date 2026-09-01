@@ -2,4 +2,4 @@ Works almost if not exactly like the builtin `java.py` (without the `eval_pyjinn
 
 Requirements:
 - Minescript 5.0 or higher
-- `pyjinn_json`
+- `pyjinn_json`: https://github.com/SmartBoty/Minescript/blob/main/pyjinn/pyjinn_json.py
