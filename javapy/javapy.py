@@ -1,6 +1,6 @@
 from __future__ import annotations
 import socket
-from system.lib.java import eval_pyjinn_script as eps
+from system.lib.java import eval_pyjinn_script as eps, JavaObject as java_JavaObject
 from uuid import uuid4
 from threading import get_ident, Thread, Lock
 import json
@@ -34,7 +34,28 @@ def run_call(data:dict):
     if result["fail"]: raise JavaException(result["reason"])
     return result
 
+def convert(obj:JavaObject|java_JavaObject) -> java_JavaObject|JavaObject:
+    """
+    Converts a javapy.py object into a java.py object (builtin)
+
+    OR
+
+    Converts a java.py object (builtin) into a javapy.py object
+    """
+    if isinstance(obj,JavaObject):
+        uuid = submit_object(obj)
+        return _convert_from(uuid)
+    elif isinstance(obj,java_JavaObject):
+        id,*name = _convert_to(obj).split(";")
+        return JavaObject(id,";".join(name))
+    else: raise ValueError(f"Cannot determine wether type '{type(obj).__class__}' is from java.py (builtin) or javapy.py!")
+
 def request_object(uuid) -> JavaObject:
+    """
+    Request a previously submitted object from a uuid.
+
+    Global, any process can request the object if they have the uuid
+    """
     debug_log(f"Requesting object: {uuid}")
     ufcid = next_ufcid()
     result = run_call({"ufcid":ufcid,"type":4,"uuid":uuid})
@@ -42,6 +63,9 @@ def request_object(uuid) -> JavaObject:
     else: return JavaObject(result["id"],result["name"])
 
 def submit_object(obj):
+    """
+    Submit a javapy object, returns the uuid wich it was stored under
+    """
     debug_log(f"Submitting object: {repr(obj)}")
     ufcid = next_ufcid()
     result = run_call({"ufcid":ufcid,"type":5,"obj_id":js[obj]["id"]})
@@ -153,6 +177,15 @@ UUID = JavaClass("java.util.UUID")
 TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
 mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
 Set = JavaClass("java.util.Set")
+
+def convert_from(uuid):
+    obj = __script__.vars["game"]["javapy"][uuid]
+    del __script__.vars["game"]["javapy"][uuid]
+    return obj
+
+def convert_to(obj):
+    obj = JavaObject(obj)
+    return f"{obj.id};{obj.obj}"
 
 def as_array(items,specific_type=Object):
     array = Array.newInstance(type(specific_type),len(items))
@@ -377,6 +410,8 @@ add_event_listener("render",_main)
 conn, _ = bridge.accept()
 reader = conn.makefile("r", encoding="utf-8")
 writer = conn.makefile("w", encoding="utf-8")
+_convert_from = script.get("convert_from")
+_convert_to = script.get("convert_to")
 
 def __reader__():
     while True:
@@ -387,7 +422,7 @@ def __reader__():
 def __garbage_collector__():
     while True:
         id = garbage.get()
-        debug_log(f"Garbage collecting: {id}")
+        debug_log(f"Garbage collecting: {id}", level=8)
         run_call({"ufcid":0,"type":6,"id":id})
         debug_log(f"Garbage collected: {id}", level=8)
 
