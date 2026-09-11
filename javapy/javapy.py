@@ -15,6 +15,7 @@ js = WeakKeyDictionary()
 garbage_lock = Lock()
 garbage = Queue()
 
+supress_java_error_messages = False
 debug_level = 0
 def debug_log(*msg,level=0):
     if (level <= debug_level or debug_level >= 9) and debug_level:
@@ -27,11 +28,13 @@ call_lock = Lock()
 def run_call(data:dict):
     with call_lock:
         writer.write(json.dumps(data)+"\n")
-    writer.flush()
+        writer.flush()
     future = Future()
     concurrent[data["ufcid"]] = future
     result = future.result()
-    if result["fail"]: raise JavaException(result["reason"])
+    if result["fail"]:
+        if supress_java_error_messages: raise JavaException()
+        else: raise JavaException(result["reason"])
     return result
 
 def convert(obj:JavaObject|java_JavaObject) -> java_JavaObject|JavaObject:
@@ -126,7 +129,24 @@ class JavaObject:
 
     def __del__(self):
         #echo(f"Garbage collecting: {js[self]["id"]}")
-        garbage.put(js[self]["id"])
+        try: garbage.put(js[self]["id"])
+        except Exception as e: debug_log(f"Could not garbage collect: {e}")
+
+    def __iter__(self):
+        i = -1
+        ufcid = next_ufcid()
+        while True:
+            i += 1
+            result = run_call({"ufcid":ufcid,"type":7,"id":js[self]["id"],"index":i,"is_iter":True})
+            if result["stop"]: return
+            if not result["java_type"]: yield result["value"]
+            else: yield JavaObject(result["id"],result["name"])
+
+    def __getitem__(self, key):
+        ufcid = next_ufcid()
+        result = run_call({"ufcid":ufcid,"type":7,"id":js[self]["id"],"index":key,"is_iter":False})
+        if not result["java_type"]: return result["value"]
+        else: yield JavaObject(result["id"],result["name"])
 
 class JavaMethod(JavaObject):
     def __init__(self, parent:JavaObject, name:str):
@@ -177,6 +197,7 @@ UUID = JavaClass("java.util.UUID")
 TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
 mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
 Set = JavaClass("java.util.Set")
+ArrayIndexOutOfBoundsException = JavaClass("java.lang.ArrayIndexOutOfBoundsException")
 
 def convert_from(uuid):
     obj = __script__.vars["game"]["javapy"][uuid]
@@ -202,9 +223,9 @@ def as_class_array(items):
     return array
 
 def can_jsonify(obj):
-    try: json.dumps(obj)
+    try: obj = json.dumps(obj)
     except: return False
-    if isinstance(obj, (type(0),type(""),type(True),type([]))): return True
+    if isinstance(json.loads(obj), (type(0),type(""),type(True))): return True
     return False
 
 def return_call(data):
@@ -291,7 +312,7 @@ def _main(_):
                 jco = JavaClassObject(payload["class"])
                 return_call({"ufcid":payload["ufcid"],"id":jco.id,"name":jco.obj.getName(),"fail":False})
             except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
+                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
         elif payload["type"] == 1: # resolve member {"ufcid":ufcid,"type":1,"member":member,"obj_id":obj.id}
             obj = cached_java_objects[payload["obj_id"]]
             if obj.type == "JavaClass":
@@ -336,7 +357,7 @@ def _main(_):
                 else: args.append(normal_args[i])
             try: result = invoke(obj,payload["method"],args)
             except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
+                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
                 continue
             if can_jsonify(result):
                 json.dumps(result)
@@ -362,7 +383,7 @@ def _main(_):
                 else: args.append(normal_args[i])
             try: result = construct(obj,args).obj
             except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
+                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
                 continue
             if can_jsonify(result):
                 java_type = False
@@ -402,7 +423,27 @@ def _main(_):
                 del cached_java_objects[payload["id"]]
                 return_call({"ufcid":payload["ufcid"],"fail":False})
             except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":e.getMessage()})
+                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
+        elif payload["type"] == 7: # subscripting
+            obj = cached_java_objects[payload["id"]].obj
+            try:
+                res = obj[payload["index"]]
+                if can_jsonify(res):
+                    java_type = False
+                    id = None
+                    name = None
+                    value = res
+                else:
+                    java_type = True
+                    jo = JavaObject(res)
+                    id = jo.id
+                    name = jo.obj.getClass().getName()
+                    value = None
+                return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"stop":False})
+            except Exception as e:
+                if isinstance(e, ArrayIndexOutOfBoundsException) and payload["is_iter"]:
+                    return_call({"ufcid":payload["ufcid"],"fail":False,"stop":True})
+                else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
 
 add_event_listener("render",_main)
 """)
