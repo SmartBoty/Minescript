@@ -14,7 +14,7 @@ from time import sleep
 import builtins
 from system.lib.minescript import log, echo
 
-debug_level = 0
+debug_level = 9
 def debug_log(*msg,level=0):
     if (level <= debug_level or debug_level >= 9) and debug_level:
         op = log if debug_level < 9 else echo
@@ -122,7 +122,7 @@ class Pyjinn:
                     debug_log(f"Adding field '{key}' from __exit__")
                     JynntonGlobals.add_field(key,value)
                 else:
-                    debug_log(f"Setting field {key} to {value} from __exit__")
+                    debug_log(f"Setting field '{key}' to '{value}' from __exit__")
                     setattr(JynntonGlobals,key,value)
             debug_log(f"Returning from Pyjinn context: {self.id}, updated: {list(payload.keys())}")
             return True
@@ -221,7 +221,7 @@ def _register_pyjinn_function(name,src,is_async,include):
     writer.flush()
 
 def call_function(name,is_async,returns,args,kwargs):
-    debug_log(f"Calling '{name}' with: {args} {kwargs}")
+    debug_log(f"Calling '{name}' with: {args} {kwargs} (async: {is_async})")
     if returns: ufcid = f"{get_ident()}@{uuid4()}"
     else: ufcid = -1
     if javapy:
@@ -241,7 +241,7 @@ def call_function(name,is_async,returns,args,kwargs):
     payload = json.dumps({"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":normal_args,"java_args":java_args,"javapy":javapy,"kwargs":kwargs}, separators=(",", ":"))
     writer.write(payload+"\n")
     writer.flush()
-    if returns:
+    if returns and not is_async:
         future = Future()
         concurrent[ufcid] = future
         payload = future.result()
@@ -437,7 +437,7 @@ async def run_async_function(name,ufcid,returns,args,kwargs):
         obj = e.getMessage()
         fail = True
         uuid = None
-    return_call({"ufcid":ufcid if returns else -1,"result":obj,"uuid":uuid,"fail":fail})
+    return_call({"ufcid":ufcid if returns else -1,"result":obj,"uuid":uuid,"fail":fail,"test":123})
 
 def _main(_):
     global cached_scripts, JynntonGlobals
@@ -463,6 +463,7 @@ def _main(_):
                     cached_java_objects.append(val)
                     if typ == "common": code += f"\n{common_includables[val]}"
                     elif typ == "class": code += f'\n{val.split(".")[-1]} = JavaClass("{val}")'
+                    elif typ == "ace": code += f"\n{"@".join(val)}"
             exec(code)
         elif payload["type"] == 1: # Function call -> {"type":1,"name":name,"async":is_async,"returns":returns,"ufcid":ufcid,"args":normal_args,"java_args":java_args,"javapy":javapy,"kwargs":kwargs}
             name = payload["name"]
@@ -477,7 +478,7 @@ def _main(_):
                         args.append(obj.obj)
                     else: args.append(normal_args[i])
             else: args = normal_args
-            if payload["async"]: run = lambda: EventLoop().run(lambda this: run_async_function(name,payload["ufcid"],payload["returns"],args,payload["kwargs"]))
+            if payload["async"]: run = lambda: EventLoop().run(lambda this: run_async_function(name,payload["ufcid"],payload["returns"] and not payload["async"],args,payload["kwargs"]))
             else: run = lambda: __script__.mainModule().globals().get(name)(*args,**payload["kwargs"])
             try: result = run() ; fail = False
             except Exception as e: result = e.getMessage() ; fail = True
@@ -485,6 +486,8 @@ def _main(_):
                 try: obj, uuid = convert_to_javapy(result)
                 except Exception as e: return_call({"ufcid":payload["ufcid"],"fail":True,"result":e.getMessage()})
                 return_call({"ufcid":payload["ufcid"],"result":obj,"fail":fail,"uuid":uuid})
+            else:
+                return_call({"ufcid":-1,"fail":fail,"result":result})
         elif payload["type"] == 2: # Python function register -> {"type":2,"funcs":out}
             for func in payload["funcs"]:
                 code = (
@@ -563,10 +566,11 @@ def __reader__():
             os._exit(-1)
         elif data["ufcid"] == -1:
             if data["fail"]:
-                sys.stderr.write((f"The following could not be raised on the main thread:\n{data["result"]}\n \nNOTICE:\n The above error is the result of a non returning function call from Jynnton. For debugging purposes, add a 'return' to it",)[0])
+                sys.stderr.write((f"The following could not be raised on the main thread:\n{data["result"]}\n \nNOTICE:\n The above error is the result of a non returning function call or async function call from Jynnton. For debugging purposes, add a 'return' to it, if its not async",)[0])
                 os._exit(-1)
         elif data["ufcid"] == -2: os._exit(0)
         elif data["ufcid"]:
+            debug_log(f"Calling '{data["func"]}' from pyjinn (Returns: {data["returns"]})")
             normal_args = data["args"]
             java_args = data["java_args"]
             if javapy:
