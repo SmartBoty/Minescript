@@ -239,7 +239,7 @@ def next_id():
 
 def invoke(self,method,args):
     static = True
-    if self.type == "JavaClass": clss = self.obj
+    if isinstance(self.obj, Class): clss = self.obj
     elif isinstance(self.obj, JavaClassType): clss = type(self.obj)
     else:
         clss = self.obj.getClass()
@@ -255,7 +255,7 @@ def invoke(self,method,args):
 
 def construct(self,args):
     static = True
-    if self.type == "JavaClass": clss = self.obj
+    if isinstance(self.obj, Class): clss = self.obj
     elif isinstance(self.obj, JavaClassType): clss = type(self.obj)
     else:
         clss = self.obj.getClass()
@@ -271,10 +271,10 @@ def construct(self,args):
 
 class JavaClassObject:
     def __init__(self, clss):
-        self.obj = Class.forName(mappings.getRuntimeClassName(clss))
+        self.obj = JavaClassType.of(Class.forName(mappings.getRuntimeClassName(clss)))
         self.id = next_id()
         cached_java_objects[self.id] = self
-        self.type = "JavaClass"
+
 
 class JavaObject:
     def __init__(self, obj):
@@ -310,13 +310,12 @@ def _main(_):
         if payload["type"] == 0: # resolve_class {"ufcid":ufcid,"type":0,"class":clss}
             try:
                 jco = JavaClassObject(payload["class"])
-                return_call({"ufcid":payload["ufcid"],"id":jco.id,"name":jco.obj.getName(),"fail":False})
+                return_call({"ufcid":payload["ufcid"],"id":jco.id,"name":str(jco.obj),"fail":False})
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
         elif payload["type"] == 1: # resolve member {"ufcid":ufcid,"type":1,"member":member,"obj_id":obj.id}
             obj = cached_java_objects[payload["obj_id"]]
-            if obj.type == "JavaClass":
-                object = obj.obj
+            if isinstance(obj.obj, Class): object = obj.obj
             elif isinstance(obj.obj, JavaClassType): object = type(obj.obj)
             else: object = obj.obj.getClass()
             try:
