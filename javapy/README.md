@@ -14,8 +14,14 @@ OR
 
 Converts a `java.py` (builtin) object into a Javapy object
 
+Note: Does not create a copy
+
 ### `submit_object(obj:JavaObject) -> str`
 Submits a Javapy object to a global space. Returns the uuid it was stored under. All processes see the same global space
 
+Note: Does not create a copy
+
 ### `request_object(uuid:str) -> JavaObject`
 Requests a previously submitted (or manually submitted via pyjinn) object under a uuid. All processes see the same global space
+
+Note: Does not create a copy
