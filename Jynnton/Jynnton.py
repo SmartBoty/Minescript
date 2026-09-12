@@ -511,8 +511,8 @@ async def ''' + func + '''(*args,**kwargs):
         normal_args = args
         java_args = []
     return_call({"ufcid":ufcid,"func":"''' + func + '''","args":normal_args,"java_args":java_args,"kwargs":kwargs,"returns": ''' + str(payload["returns"]) + '''})
+    el = EventLoop()
     while ''' + str(payload["returns"]) + ''':
-        el = EventLoop()
         await el.sleep(0)
         if ufcid in [key for key in __script__.vars["game"]["Jynnton"][portid]["returns"]]:
             dat = __script__.vars["game"]["Jynnton"][portid]["returns"][ufcid]
@@ -543,9 +543,13 @@ async def ''' + func + '''(*args,**kwargs):
         elif payload["type"] == 10: # Sync globals
             return_call({"ufcid":payload["ufcid"],"payload":JynntonGlobals.__dict__})
 
-__atexit_register__(lambda: return_call({"ufcid":-2}))
+def handle_exit():
+    return_call({"ufcid":-2})
+    del __script__.vars["game"]["Jynnton"][portid]
 
-base_builtins = ["builtins"] + list(__script__.mainModule().globals().vars().keys()) + [reflect_field(builtin,"name") for builtin in reflect_field(__script__.mainModule().globals(),"BUILTINS")] + ["__has_explicit_Minescript_import__","set_chat_input","player_hand_items","get_block","echo","player_press_drop","player_press_forward","player_press_sneak","getblock","_SleepRequest","__script__","ManagedCallback","player_inventory_select_slot","getblocklist","screen_name","player_name","player_orientation","get_entities","_System","Script","add_event_listener","BlockPacker","player_get_targeted_entity","players","player_press_left","get_player","execute","get_block_region","echo_json","player_press_attack","__name__","set_interval","append_chat_history","player_get_targeted_block","container_get_items","log","job_info","_EventRequest","show_chat_screen","screenshot","sys","player_press_jump","player_press_backward","player_set_orientation","chat_input","player_position","BlockPack","player_press_pick_item","_Coroutine","Minescript","BlockRegion","player","player_press_sprint","player_press_right","remove_event_listener","player_inventory","player_look_at","player_press_swap_hands","version_info","get_players","Rotation","Rotations","get_block_list","combine_rotations","set_timeout","EventLoop","press_key_bind","entities","chat","player_health","_RuntimeException","world_info","player_press_use"]
+__atexit_register__(handle_exit)
+
+base_builtins = ["base_builtins"] + list(__script__.mainModule().globals().vars().keys()) + [reflect_field(builtin,"name") for builtin in reflect_field(__script__.mainModule().globals(),"BUILTINS")] + ["__has_explicit_Minescript_import__","set_chat_input","player_hand_items","get_block","echo","player_press_drop","player_press_forward","player_press_sneak","getblock","_SleepRequest","__script__","ManagedCallback","player_inventory_select_slot","getblocklist","screen_name","player_name","player_orientation","get_entities","_System","Script","add_event_listener","BlockPacker","player_get_targeted_entity","players","player_press_left","get_player","execute","get_block_region","echo_json","player_press_attack","__name__","set_interval","append_chat_history","player_get_targeted_block","container_get_items","log","job_info","_EventRequest","show_chat_screen","screenshot","sys","player_press_jump","player_press_backward","player_set_orientation","chat_input","player_position","BlockPack","player_press_pick_item","_Coroutine","Minescript","BlockRegion","player","player_press_sprint","player_press_right","remove_event_listener","player_inventory","player_look_at","player_press_swap_hands","version_info","get_players","Rotation","Rotations","get_block_list","combine_rotations","set_timeout","EventLoop","press_key_bind","entities","chat","player_health","_RuntimeException","world_info","player_press_use"]
 log("[Jynnton] Starting main loop")
 add_event_listener("render",_main)
 """)
