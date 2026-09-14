@@ -25,3 +25,6 @@ Note: Does not create a copy of the java side object
 Requests a previously submitted (or manually submitted via pyjinn) object under a uuid. All processes see the same global space
 
 Note: Does not create a copy of the java side object
+
+### `type(obj)`
+Import it to replace the already existing `type()` function. It behaves exactly how it does in pyjinn, returning the java side class of the object
