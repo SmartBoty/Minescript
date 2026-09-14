@@ -36,6 +36,7 @@ Note: Does not create a copy of the java side object
 ### `type(obj)`
 Import it to replace the already existing `type()` function. It behaves exactly how it does in pyjinn, returning the java side class of the object. Works exactly like the builtin for any other object
 
+# Example usages:
 
 Visual showcase of the difference in speed (compared to the builtin library):
 ```py
