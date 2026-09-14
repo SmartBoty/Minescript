@@ -10,6 +10,7 @@ Supports:
 - ~3× faster execution compared to `java.py` (builtin)
 - `type()`* class grabbing (Equivalend of `Object.class` in java)
 - `isinstance` checks
+- `len` check
 - Converting `java.py` (builtin) objects to `javapy` objects and back
 - Automatic GC (garbage collection)
 
