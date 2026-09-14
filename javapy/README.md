@@ -27,4 +27,4 @@ Requests a previously submitted (or manually submitted via pyjinn) object under 
 Note: Does not create a copy of the java side object
 
 ### `type(obj)`
-Import it to replace the already existing `type()` function. It behaves exactly how it does in pyjinn, returning the java side class of the object
+Import it to replace the already existing `type()` function. It behaves exactly how it does in pyjinn, returning the java side class of the object. Works exactly like the builtin for any other object
