@@ -275,7 +275,6 @@ class JavaClassObject:
         self.id = next_id()
         cached_java_objects[self.id] = self
 
-
 class JavaObject:
     def __init__(self, obj):
         self.obj = obj
@@ -295,6 +294,7 @@ def _main(_):
     global cached_java_objects
     lines = []
     iters = 0
+    if not reader.ready(): return
     while True:
         iters += 1
         if iters > 50: log("Overloaded! Exiting reader...") ; break
