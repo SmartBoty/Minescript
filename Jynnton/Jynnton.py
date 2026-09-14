@@ -443,6 +443,7 @@ def _main(_):
     global cached_scripts, JynntonGlobals
     lines = []
     iters = 0
+    if not reader.ready(): return
     while True:
         iters += 1
         if iters > 50: log("[Jynnton] Overloaded! Exiting reader...") ; break
