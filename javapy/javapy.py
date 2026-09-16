@@ -180,7 +180,7 @@ class JavaObject:
 
     def __len__(self):
         ufcid = next_ufcid()
-        return run_call({"ufcid":ufcid,"id":js[self]["id"]})["length"]
+        return run_call({"ufcid":ufcid,"type":8,"id":js[self]["id"]})["length"]
 
 class JavaMethod(JavaObject):
     def __init__(self, parent:JavaObject, name:str):
@@ -294,10 +294,11 @@ def as_class_array(items):
         Array.set(array, i, arg)
     return array
 
+can_jsonify_types = (type(0),type(""),type(True),type(None))
 def can_jsonify(obj):
     try: obj = json.dumps(obj)
     except: return False
-    if isinstance(json.loads(obj), (type(0),type(""),type(True))): return True
+    if isinstance(json.loads(obj), can_jsonify_types): return True
     return False
 
 def return_call(data):
