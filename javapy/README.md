@@ -38,7 +38,7 @@ Note: Does not create a copy of the java side object
 Import it to replace the already existing `type()` function. It behaves exactly how it does in pyjinn, returning the java side class of the object. Works exactly like the builtin for any other object
 
 ### `FixedReturnFunction(obj:JavaObject)`
-Returns a lambda style function, that has a fixed return value. Can be used as an arg in java method calls
+Returns a lambda style function, that has a fixed return value (equal to `lambda *_: obj`). Can be used as an arg in java method calls
 
 # Example usages:
 
