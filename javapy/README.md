@@ -40,6 +40,9 @@ Import it to replace the already existing `type()` function. It behaves exactly 
 ### `FixedReturnFunction(obj:JavaObject)`
 Returns a lambda style function, that has a fixed return value (equal to `lambda *_: obj`). Can be used as an arg in java method calls
 
+### `__script__`
+This is the handle to a completely empty pyjinn script instance. Currently does not support item assignment
+
 # Example usages:
 
 Visual showcase of the difference in speed (compared to the builtin library):
