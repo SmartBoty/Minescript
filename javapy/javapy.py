@@ -149,9 +149,10 @@ class JavaObject:
         normal_args, java_args = normalize_items(args)
         if js[self]["type"] == "FixedReturnFunction":
             debug_log(f"Resolving FixedReturnFunction call of {js[self]["name"]}")
-            result = run_call({"ufcid":ufcid,"type":11,"id":js[self]["id"]})
-            if not result["java_type"]: return result["value"]
-            else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+            #result = run_call({"ufcid":ufcid,"type":11,"id":js[self]["id"]})
+            #if not result["java_type"]: return result["value"]
+            #else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+            return js[self]["obj"]
         else:
             debug_log(f"Resolving constructor call of {js[self]["name"]}{args}")
             result = run_call({"ufcid":ufcid,"type":3,"obj_id":js[self]["id"],"args":normal_args,"java_args":java_args})
@@ -248,14 +249,15 @@ class FixedReturnFunction(JavaObject):
     def __new__(cls, obj:JavaObject) -> JavaObject:
         debug_log(f"Creating FixedReturnFunction from {repr(obj)}")
         if isinstance(obj, JavaObject):
-            obj = js[obj]["id"]
+            obj_id = js[obj]["id"]
             java = True
         else: java = False
         ufcid = next_ufcid()
-        result = run_call({"ufcid":ufcid,"type":10,"returns":obj,"java":java})
-        obj = JavaObject(result["id"],result["name"],result["runtime_type"])
-        js[obj]["type"] = "FixedReturnFunction"
-        return obj
+        result = run_call({"ufcid":ufcid,"type":10,"returns":obj_id,"java":java})
+        java_obj = JavaObject(result["id"],result["name"],result["runtime_type"])
+        js[java_obj]["type"] = "FixedReturnFunction"
+        js[java_obj]["obj"] = obj
+        return java_obj
 
 
 bridge = socket.socket()
@@ -370,7 +372,7 @@ def construct(self,args):
     ctor = TypeChecker.findBestMatchingConstructor(clss, classes, None)
     if not ctor.isEmpty():
         return ctor.get().newInstance(__script__.mainModule().globals(),array_args)
-    raise Exception(f"NoSuchConstructor: {self.obj.getName()}({str(classes)[1:-1]})")
+    raise Exception(f"NoSuchConstructor: {self.obj}({str(classes)[1:-1]})")
 
 class JavaClassObject:
     def __init__(self, clss):
@@ -468,7 +470,6 @@ def _main(_):
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
                 continue
             if can_jsonify(result):
-                json.dumps(result)
                 java_type = False
                 value = result
                 id = None
@@ -592,7 +593,6 @@ def _main(_):
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
                 continue
             if not cached_java_objects[payload["id"]].java_return:
-                json.dumps(result)
                 java_type = False
                 value = result
                 id = None
