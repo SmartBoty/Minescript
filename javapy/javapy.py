@@ -259,6 +259,14 @@ class FixedReturnFunction(JavaObject):
         js[java_obj]["obj"] = obj
         return java_obj
 
+class PyjinnScript(JavaObject):
+    init = None
+    def __new__(cls):
+        debug_log("Resolving creation of __script__")
+        if PyjinnScript.init: return PyjinnScript.init
+        ufcid = next_ufcid()
+        result = run_call({"ufcid":ufcid,"type":11})
+        return JavaObject(result["id"],result["name"],result["runtime_type"])
 
 bridge = socket.socket()
 bridge.bind(("127.0.0.1", 0))
@@ -274,7 +282,8 @@ OutputStreamWriter = JavaClass("java.io.OutputStreamWriter")
 StandardCharsets = JavaClass("java.nio.charset.StandardCharsets")
 BufferedReader = JavaClass("java.io.BufferedReader")
 InputStreamReader = JavaClass("java.io.InputStreamReader")
-mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
+Minescript = JavaClass("net.minescript.common.Minescript")
+mappings = Minescript.mappingsLoader.get()
 Class = JavaClass("java.lang.Class")
 Array = JavaClass("java.lang.reflect.Array")
 Object = JavaClass("java.lang.Object")
@@ -284,9 +293,7 @@ TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
 mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
 Set = JavaClass("java.util.Set")
 ArrayIndexOutOfBoundsException = JavaClass("java.lang.ArrayIndexOutOfBoundsException")
-Modifier = JavaClass("java.lang.reflect.Modifier")
-
-BiFunction = JavaClass("java.util.function.BiFunction")
+#Modifier = JavaClass("java.lang.reflect.Modifier")
 
 def get_type_class_of(obj):
     if isinstance(obj.obj, Class): clss = obj.obj
@@ -395,6 +402,7 @@ current_id = -1
 cached_java_objects = {}
 cached_java_types = {}
 if "javapy" not in __script__.vars["game"]: __script__.vars["game"]["javapy"] = {}
+scripts = []
 
 def _main(_):
     global cached_java_objects, runtime_type_id
@@ -585,31 +593,18 @@ def _main(_):
             jo.java_return = payload["java"]
             runtime_type = resolve_type(jo)
             return_call({"ufcid":payload["ufcid"],"id":jo.id,"name":str(jo.obj),"runtime_type":{"id":runtime_type.id,"name":str(runtime_type.obj)},"fail":False})
-        elif payload["type"] == 11: # FixedReturnFunction call
-            obj = cached_java_objects[payload["id"]].obj
-            try:
-                result = obj()
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-                continue
-            if not cached_java_objects[payload["id"]].java_return:
-                java_type = False
-                value = result
-                id = None
-                name = None
-                runtime_type_name = None
-                runtime_type_id = None
-            else:
-                java_type = True
-                value = None
-                jo = JavaObject(result)
-                id = jo.id
-                name = str(jo.obj)
-                runtime_type = resolve_type(jo)
-                runtime_type_name = str(runtime_type.obj)
-                runtime_type_id = runtime_type.id
-            return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"runtime_type":{"name":runtime_type_name,"id":runtime_type_id}})
+        elif payload["type"] == 11: # grabs __script__ handle
+            script = Minescript.loadPyjinnScript(JavaList(["__eval__.pyj"]), "import minescript")
+            script.redirectStdout(__script__.stdout)
+            script.redirectStderr(__script__.stderr)
+            script.vars["game"] = __script__.vars["game"]
+            scripts.append(script)
+            script.exec()
+            jo = JavaObject(script)
+            runtime_type = resolve_type(jo)
+            return_call({"ufcid":payload["ufcid"],"fail":False,"id":jo.id,"name":str(jo.obj),"runtime_type":{"name":str(runtime_type.obj),"id":runtime_type.id}})
 
+__script__.atExit(lambda status: [script.exit(status) for script in scripts])
 
 add_event_listener("render",_main)
 """)
@@ -635,6 +630,8 @@ def __garbage_collector__():
 
 Thread(target=__reader__,daemon=True).start()
 Thread(target=__garbage_collector__,daemon=True).start()
+
+__script__ = PyjinnScript()
 
 if TYPE_CHECKING:
     class FixedReturnFunction(JavaObject):
