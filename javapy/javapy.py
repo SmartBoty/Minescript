@@ -181,7 +181,7 @@ class JavaObject:
         ufcid = next_ufcid()
         result = run_call({"ufcid":ufcid,"type":7,"id":js[self]["id"],"index":key,"is_iter":False})
         if not result["java_type"]: return result["value"]
-        else: yield JavaObject(result["id"],result["name"],result["runtime_type"])
+        else: return JavaObject(result["id"],result["name"],result["runtime_type"])
 
     def __instancecheck__(self, other):
         self_id = java_types[js[self]["runtime_type"]]["id"]
@@ -560,13 +560,18 @@ def _main(_):
                     id = None
                     name = None
                     value = res
+                    runtime_type_name = None
+                    runtime_type_id = None
                 else:
                     java_type = True
                     jo = JavaObject(res)
                     id = jo.id
-                    name = jo.obj.getClass().getName()
+                    name = str(jo.obj)
                     value = None
-                return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"stop":False})
+                    runtime_type = resolve_type(jo)
+                    runtime_type_name = str(runtime_type.obj)
+                    runtime_type_id = runtime_type.id
+                return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"stop":False,"runtime_type":{"name":runtime_type_name,"id":runtime_type_id}})
             except Exception as e:
                 if isinstance(e, ArrayIndexOutOfBoundsException) and payload["is_iter"]:
                     return_call({"ufcid":payload["ufcid"],"fail":False,"stop":True})
