@@ -11,6 +11,8 @@ from weakref import WeakKeyDictionary
 from time import sleep
 from queue import Queue
 import builtins
+import inspect
+import ast
 
 concurrent = {}
 js = WeakKeyDictionary()
@@ -119,6 +121,9 @@ def normalize_items(items):
 
 class type:
     def __new__(cls, obj) -> JavaObject:
+        """
+        Returns the runtime class of the JavaObject. For any other object, it uses the builtin protocol
+        """
         if isinstance(obj, JavaObject):
             return js[obj]["runtime_type"] if "runtime_type" in js[obj] else resolve_type(obj)
         else: return builtins.type(obj)
@@ -140,12 +145,18 @@ class JavaObject:
         return f"<{js[self]["type"]} {js[self]["id"]} {js[self]["name"]}>"
 
     def __call__(self,*args) -> JavaObject:
-        debug_log(f"Resolving constructor call of {js[self]["name"]}{args}")
         ufcid = next_ufcid()
         normal_args, java_args = normalize_items(args)
-        result = run_call({"ufcid":ufcid,"type":3,"obj_id":js[self]["id"],"args":normal_args,"java_args":java_args})
-        if not result["java_type"]: return result["value"]
-        else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+        if js[self]["type"] == "FixedReturnFunction":
+            debug_log(f"Resolving FixedReturnFunction call of {js[self]["name"]}")
+            result = run_call({"ufcid":ufcid,"type":11,"id":js[self]["id"]})
+            if not result["java_type"]: return result["value"]
+            else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+        else:
+            debug_log(f"Resolving constructor call of {js[self]["name"]}{args}")
+            result = run_call({"ufcid":ufcid,"type":3,"obj_id":js[self]["id"],"args":normal_args,"java_args":java_args})
+            if not result["java_type"]: return result["value"]
+            else: return JavaObject(result["id"],result["name"],result["runtime_type"])
 
     def __getattr__(self, name:str) -> JavaObject:
         return resolve_member(name, self)
@@ -202,6 +213,9 @@ class JavaMethod(JavaObject):
 
 class JavaClass(JavaObject):
     def __init__(self, clss):
+        """
+        Resolves a java class
+        """
         if self in js: return
         id, name, runtime_type = resolve_class(clss)
         js[self] = {}
@@ -219,7 +233,7 @@ class JavaClass(JavaObject):
 
 class JavaType(JavaObject):
     def __init__(self, id, name):
-        java_types[self] = {"id":id,"name":name}
+        java_types[self] = {"id":id,"name":name,"type":"JavaType"}
         js[self] = java_types[self]
 
     def __str__(self):
@@ -229,6 +243,20 @@ class JavaType(JavaObject):
         return f"<JavaType {java_types[self]["id"]} {java_types[self]["name"]}>"
 
     def __del__(self): pass
+
+class FixedReturnFunction(JavaObject):
+    def __new__(cls, obj:JavaObject) -> JavaObject:
+        debug_log(f"Creating FixedReturnFunction from {repr(obj)}")
+        if isinstance(obj, JavaObject):
+            obj = js[obj]["id"]
+            java = True
+        else: java = False
+        ufcid = next_ufcid()
+        result = run_call({"ufcid":ufcid,"type":10,"returns":obj,"java":java})
+        obj = JavaObject(result["id"],result["name"],result["runtime_type"])
+        js[obj]["type"] = "FixedReturnFunction"
+        return obj
+
 
 bridge = socket.socket()
 bridge.bind(("127.0.0.1", 0))
@@ -254,8 +282,9 @@ TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
 mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
 Set = JavaClass("java.util.Set")
 ArrayIndexOutOfBoundsException = JavaClass("java.lang.ArrayIndexOutOfBoundsException")
-
 Modifier = JavaClass("java.lang.reflect.Modifier")
+
+BiFunction = JavaClass("java.util.function.BiFunction")
 
 def get_type_class_of(obj):
     if isinstance(obj.obj, Class): clss = obj.obj
@@ -290,15 +319,13 @@ def as_class_array(items):
     array = Array.newInstance(type(Class),len(items))
     for i, arg in enumerate(items):
         if isinstance(arg, JavaClassType): arg = type(arg)
-        elif not isinstance(arg, Class): arg = arg.getClass()
+        elif not isinstance(arg, Class): arg = arg.getClass() if arg is not None else null
         Array.set(array, i, arg)
     return array
 
 can_jsonify_types = (type(0),type(""),type(True),type(None))
 def can_jsonify(obj):
-    try: obj = json.dumps(obj)
-    except: return False
-    if isinstance(json.loads(obj), can_jsonify_types): return True
+    if isinstance(obj, can_jsonify_types): return True
     return False
 
 def return_call(data):
@@ -310,20 +337,27 @@ def next_id():
     current_id += 1
     return current_id
 
+method_func = lambda _, method: Set.of(method)
 def invoke(self,method,args):
     if isinstance(self.obj, JavaClassType): clss = type(self.obj)
     else: clss = self.obj.getClass()
     classes = as_class_array(args)
     array_args = as_array(args)
-    method_func = lambda*_:Set.of(method)
     m = TypeChecker.findBestMatchingMethod(clss, True, method_func, method, classes, None)
-    if not m.isEmpty():
+    try:
+        m
+        force_skip = False
+    except: force_skip = True
+    if not m.isEmpty() or force_skip:
         result = m.get().invoke(__script__.mainModule().globals(),clss,array_args)
         return result
     else:
         m = TypeChecker.findBestMatchingMethod(clss, False, method_func, method, classes, None)
-        result = m.get().invoke(__script__.mainModule().globals(),self.obj,array_args)
-        return result
+        try: m
+        except: raise Exception(f"Failed to find suitable method: {method}")
+        if not m.isEmpty():
+            result = m.get().invoke(__script__.mainModule().globals(),self.obj,array_args)
+            return result
     raise Exception(f"NoSuchMethod: {method}({str(classes)[1:-1]}) (jpy)")
 
 def construct(self,args):
@@ -352,7 +386,7 @@ class JavaObject:
         self.type = "JavaObject"
 
 bridge = Socket("127.0.0.1", """ + str(port) + r""")
-bridge.setSoTimeout(1)
+null = bridge.setSoTimeout(1)
 writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
 reader = BufferedReader(InputStreamReader(bridge.getInputStream(), StandardCharsets.UTF_8))
 current_id = -1
@@ -425,7 +459,7 @@ def _main(_):
             java_args = payload["java_args"]
             args = []
             for i in range(len(normal_args)):
-                if normal_args[i] is None:
+                if normal_args[i] is None and java_args[i] is not None:
                     args.append(cached_java_objects[java_args[i]].obj)
                 else: args.append(normal_args[i])
             try:
@@ -542,6 +576,40 @@ def _main(_):
                 return_call({"ufcid":payload["ufcid"],"fail":False,"name":str(runtime_type.obj),"id":runtime_type.id})
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
+        elif payload["type"] == 10: # FixedReturnFunction def
+            if payload["java"]:
+                returns = cached_java_objects[payload["returns"]].obj
+            else: returns = payload["returns"]
+            jo = JavaObject(lambda *_: returns)
+            jo.java_return = payload["java"]
+            runtime_type = resolve_type(jo)
+            return_call({"ufcid":payload["ufcid"],"id":jo.id,"name":str(jo.obj),"runtime_type":{"id":runtime_type.id,"name":str(runtime_type.obj)},"fail":False})
+        elif payload["type"] == 11: # FixedReturnFunction call
+            obj = cached_java_objects[payload["id"]].obj
+            try:
+                result = obj()
+            except Exception as e:
+                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
+                continue
+            if not cached_java_objects[payload["id"]].java_return:
+                json.dumps(result)
+                java_type = False
+                value = result
+                id = None
+                name = None
+                runtime_type_name = None
+                runtime_type_id = None
+            else:
+                java_type = True
+                value = None
+                jo = JavaObject(result)
+                id = jo.id
+                name = str(jo.obj)
+                runtime_type = resolve_type(jo)
+                runtime_type_name = str(runtime_type.obj)
+                runtime_type_id = runtime_type.id
+            return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"runtime_type":{"name":runtime_type_name,"id":runtime_type_id}})
+
 
 add_event_listener("render",_main)
 """)
@@ -567,3 +635,12 @@ def __garbage_collector__():
 
 Thread(target=__reader__,daemon=True).start()
 Thread(target=__garbage_collector__,daemon=True).start()
+
+if TYPE_CHECKING:
+    class FixedReturnFunction(JavaObject):
+        def __init__(self, obj):
+            """
+            Creates a pyjinn function that has a fixed return value. This object can be passed down as arguments to java calls
+        
+            Equal to `lambda *_: obj`
+            """
