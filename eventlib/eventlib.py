@@ -72,7 +72,9 @@ def __serve_listener__():
                     queue.put({
                         "type": m.EventType.SERVER_PARTICLE,
                         "particle": event["particle"],
-                        "position": (float(event["x"]),float(event["y"]),float(event["z"]))
+                        "x": float(event["x"]),
+                        "y": float(event["y"]),
+                        "z": float(event["z"])
                     })
             elif event["event"] == "client_tick":
                 queues = registered_client_tick.copy()
@@ -142,7 +144,7 @@ def __serve_listener__():
                         "message": event["text"]
                     })
             else:
-                m.log(f"[EventLib] Event unnaccounted for: {event["event"]} ({event})")
+                m.log(f"[EventLib] Event unnaccounted for: {event['event']} ({event})")
             queues = []
         except: m.log(f"[EventLib] Malformed json event: '{line[:-1]}'")
 
@@ -236,7 +238,7 @@ def s2c(event):
     
     if __script__.vars["game"]["eventlib"][identifier]["server_particle"]:
         if isinstance(event.packet, ClientboundLevelParticlesPacket): 
-            add_event('{"event":"server_particle","particle":"' + BuiltInRegistries.PARTICLE_TYPE.getKey(event.packet.getParticle().getType()).toString() + '","x":str(event.packet.getX()),"y":str(event.packet.getY()),"z":str(event.packet.getZ())}')
+            add_event('{"event":"server_particle","particle":"' + BuiltInRegistries.PARTICLE_TYPE.getKey(event.packet.getParticle().getType()).toString() + '","x":' + str(event.packet.getX()) + ',"y":' + str(event.packet.getY()) + ',"z":' + str(event.packet.getZ()) + '}')
 
 def c2s(event):
     if __script__.vars["game"]["eventlib"][identifier]["command_intercept"]["state"]:
@@ -343,7 +345,9 @@ class ENTITY_DIED:
 class SERVER_PARTICLE:
     type:str
     particle:str
-    position:tuple[float,float,float]
+    x: float
+    y: float
+    z: float
 
 @dataclass
 class CLIENT_TICK:
