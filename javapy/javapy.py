@@ -345,8 +345,25 @@ bridge = socket.socket()
 bridge.bind(("127.0.0.1", 0))
 bridge.listen(1)
 port = bridge.getsockname()[1]
+script_loaded = False
 
-script = eps(
+def __convert_from(*args):
+    global _convert_from
+    while not script_loaded: pass
+    _convert_from = script.get("convert_from")
+    return _convert_from(*args)
+_convert_from = __convert_from
+
+def __convert_to(*args):
+    global _convert_to
+    while not script_loaded: pass
+    _convert_to = script.get("convert_to")
+    return _convert_to(*args)
+_convert_to = __convert_to
+
+def __start__():
+    global script, script_loaded
+    try: script = eps(
 r"""
 import pyjinn_json as json
 Socket = JavaClass("java.net.Socket")
@@ -743,12 +760,13 @@ __script__.atExit(lambda status: [script.exit(status) for script in scripts])
 
 add_event_listener("render",_main)
 """)
+    except: pass
+    script_loaded = True
+Thread(target=__start__).start()
 
 conn, _ = bridge.accept()
 reader = conn.makefile("r", encoding="utf-8")
 writer = conn.makefile("w", encoding="utf-8")
-_convert_from = script.get("convert_from")
-_convert_to = script.get("convert_to")
 
 def __reader__():
     while True:
