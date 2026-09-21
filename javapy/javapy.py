@@ -784,5 +784,6 @@ __all__ = [
     "type",
     "__script__",
     "FixedReturnFunction",
-    "JavaType"
+    "JavaType",
+    "JavaMethod"
 ]
