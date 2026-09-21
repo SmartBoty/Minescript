@@ -59,8 +59,8 @@ This new way, makes it differ from `java.py` (builtin), and becus of this, it ca
 ```py
 from javapy import Alternative_Member_Resolver
 
-Alternative_Member_Resolver.enable() # Enabled by default, global
-Alternative_Member_Resolver.disable() # Disable it, global
+Alternative_Member_Resolver.enable() # Enabled by default, global (overwrites local state)
+Alternative_Member_Resolver.disable() # Disable it, global (overwrites local state)
 Alternative_Member_Resolver.clear() # Disables it, and allow thread local `with` statements to change this state locally
 with Alternative_Member_Resolver: # Enables it locally, then disables it. Threadsafe
     ...
