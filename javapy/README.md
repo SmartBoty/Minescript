@@ -14,7 +14,7 @@ Supports:
 - Converting `java.py` (builtin) objects to `javapy` objects and back
 - Automatic GC (garbage collection)
 
-## Javapy specific functions
+## Javapy specific functions / objects
 ### `convert(obj:JavaObject) -> JavaObject`
 Converts a Javapy object into a `java.py` (builtin) object
 
@@ -42,6 +42,29 @@ Returns a lambda style function, that has a fixed return value (equal to `lambda
 
 ### `__script__`
 This is the handle to a completely empty pyjinn script instance. Currently does not support item assignment
+
+### `Alternative_Member_Resolver`
+Since this [commit](https://github.com/SmartBoty/Minescript/commit/4d919dc42157a3137771cd851402e46434a223ba), `javapy` uses a different way to access fields and methods, making it more accurate to java:
+```py
+from javapy import JavaClass
+
+mc = JavaClass("net.minecraft.client.Minecraft")
+
+mc.getInstance()  # Correctly resolves as <METHOD ACCESS>
+mc.getInstance    # Correctly resolves as <FIELD ACCESS>
+```
+Prior to this change, `javapy` simply overwritten the field, if a method with the same name exists. This should fix that.
+
+This new way, makes it differ from `java.py` (builtin), and becus of this, it can be disabled:
+```
+from javapy import Alternative_Member_Resolver
+
+Alternative_Member_Resolver.enable() # Enabled by default, global
+Alternative_Member_Resolver.disable() # Disable it, global
+Alternative_Member_Resolver.clear() # Disables it, and allow thread local `with` statements to change this state locally
+with Alternative_Member_Resolver: # Enables it locally, then disables it. Threadsafe
+    ...
+```
 
 # Example usages:
 
