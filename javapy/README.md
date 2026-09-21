@@ -56,7 +56,7 @@ mc.getInstance    # Correctly resolves as <FIELD ACCESS>
 Prior to this change, `javapy` simply overwritten the field, if a method with the same name exists. This should fix that.
 
 This new way, makes it differ from `java.py` (builtin), and becus of this, it can be disabled:
-```
+```py
 from javapy import Alternative_Member_Resolver
 
 Alternative_Member_Resolver.enable() # Enabled by default, global
