@@ -335,7 +335,7 @@ def __reader__():
         data = json.loads(_read())
         responded = True
         if data["type"] == 0:
-            for renderer in renderers:
+            for renderer in renderers.copy():
                 renderer._promise.fulfill()
                 renderer._guiscale = data["gui_scale"]
         elif data["type"] == 1:
