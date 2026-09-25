@@ -3,6 +3,12 @@ Easily render simple objects in world, or on the HUD
 
 v1 by `JulianIsLost`: https://github.com/JulianIsLost5/minescript-scripts/tree/main/lib_ren
 
+Requires:
+- Python 3.12+
+- Minescript 5.0+
+- Minecraft 1.21.8+
+- `pyjinn_json`: https://github.com/SmartBoty/Minescript/blob/main/pyjinn/pyjinn_json.py
+
 ## `Renderer`
 Main class to render with this library
 
