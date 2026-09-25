@@ -5,7 +5,7 @@ v1 by `JulianIsLost`: https://github.com/JulianIsLost5/minescript-scripts/tree/m
 
 Requires:
 - Python 3.12+
-- Minescript 5.0+
+- Minescript 5.b0+
 - Minecraft 1.21.8+
 - `pyjinn_json`: https://github.com/SmartBoty/Minescript/blob/main/pyjinn/pyjinn_json.py
 
