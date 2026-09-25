@@ -2,7 +2,7 @@
 Jynnton (`ˈdʒɪn.θən`, aka Jinn-ton) is a library made for Minescript, that allows you to create and run Pyjinn functions from Python.
 
 Requirements:
-- Minescript 5.0+
+- Minescript 5.b0+
 - Mappings (`\install_mappings`) for versions below 26.x
 - `pyjinn_json`: https://github.com/SmartBoty/Minescript/blob/main/pyjinn/pyjinn_json.py
 - Only tested on version 5.0b11, but may work on other versions aswell
