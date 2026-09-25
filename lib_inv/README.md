@@ -4,6 +4,7 @@ Easily and quickly manipulate the inventory.
 Requirements:
 - python 3.12+
 - mappings (`\install_mappings`) for versions below 26.x
+- Minescript 5.0b+
 # Functions
 
 ### `inventory() -> list[dict]`
