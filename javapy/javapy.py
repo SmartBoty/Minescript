@@ -182,7 +182,8 @@ class JavaObject:
             frame = sys._getframe(1)
             if frame.f_code.co_code[frame.f_lasti + 1] & 1:
                 debug_log(f"Resolved member '{name}' as a <METHOD> access")
-                return resolve_member_as_method(name, self)
+                #return resolve_member_as_method(name, self)
+                return JavaMethod(name, self)
             else:
                 debug_log(f"Resolved member '{name}' as a <FIELD> access")
                 return resolve_member_as_field(name, self)
@@ -191,7 +192,7 @@ class JavaObject:
     def __del__(self):
         #echo(f"Garbage collecting: {js[self]["id"]}")
         try: garbage.put(js[self]["id"])
-        except Exception as e: debug_log(f"Failed to garbage collect: {e}")
+        except Exception as e: debug_log ; (f"Failed to garbage collect: {e}")
 
     def __contains__(self, item):
         debug_log(f"Resolving __contains__ for {repr(self)}")
@@ -244,6 +245,8 @@ class JavaMethod(JavaObject):
         del self
         if not result["java_type"]: return result["value"]
         else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+
+    def __del__(*_): pass
 
 class JavaMember(JavaObject):
     def __init__(self, parent:JavaObject, name:str):
@@ -725,11 +728,13 @@ def _main(_):
             if isinstance(obj, JavaClassType): clss = type(obj)
             else: clss = obj.getClass()
             try:
+                found = False
                 for method in clss.getMethods():
                     if method.getName() == payload["method"]:
                         return_call({"ufcid":payload["ufcid"],"fail":False})
-                        return
-                raise Exception(f"NoSuchMethod: {obj} has no method named '{payload["method"]}'")
+                        found = True
+                        break
+                if not found: raise Exception(f"NoSuchMethod: {obj} has no method named '{payload["method"]}'")
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
         elif payload["type"] == 14: # alt resolve field
@@ -760,7 +765,7 @@ __script__.atExit(lambda status: [script.exit(status) for script in scripts])
 
 add_event_listener("render",_main)
 """)
-    except: pass
+    except Exception as e: debug_log(f"Exception during script loading: {e}",level=8)
     script_loaded = True
 Thread(target=__start__).start()
 
