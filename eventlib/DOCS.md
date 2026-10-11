@@ -22,6 +22,7 @@ Intercepts all incoming messages, before they reach other parts of the client. C
 listener: register_incoming_chat_interceptor(*,startswith="")
 type: EventType.INCOMING_CHAT_INTERCEPT
 message: str
+json: dict
 ```
 
 ### Entity totem popped
