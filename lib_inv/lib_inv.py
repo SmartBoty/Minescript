@@ -3,8 +3,10 @@ debug = False
 import socket
 from system.lib.java import eval_pyjinn_script as eps
 import json
-from threading import Thread
+from threading import Thread, get_ident, Lock
 from system.lib.minescript import version_info
+from uuid import uuid1
+from concurrent.futures import Future, TimeoutError
 
 version = int("".join([n for n in version_info().minecraft if n.isdigit()]))
 
@@ -14,10 +16,17 @@ version_mappings = {
     "clicktype_const": {
         (0,12111) : ("handleInventoryMouseClick","""ClickType = JavaClass("net.minecraft.world.inventory.ClickType")"""),
         (99262,999999): ("handleContainerInput","""ClickType = JavaClass("net.minecraft.world.inventory.ContainerInput")""")
+    },
+    "screen_const": {
+        (0,12111) : "",
+        (99262,999999): ".gui"
     }
 }
 
 clicktype_mapping = [v for k,v in version_mappings["clicktype_const"].items() if k[0] <= version <= k[1]][0]
+screen_mapping = [v for k,v in version_mappings["screen_const"].items() if k[0] <= version <= k[1]][0]
+concurrent = {}
+writer_lock = Lock()
 
 bridge = socket.socket()
 bridge.bind(("127.0.0.1", 0))
@@ -39,21 +48,34 @@ InputStreamReader = JavaClass("java.io.InputStreamReader")
 """ + clicktype_mapping[1] + r"""
 RegistryOps = JavaClass("net.minecraft.resources.RegistryOps")
 InventoryScreen = JavaClass("net.minecraft.client.gui.screens.inventory.InventoryScreen")
+AbstractButton = JavaClass("net.minecraft.client.gui.components.AbstractButton")
+MouseButtonEvent = JavaClass("net.minecraft.client.input.MouseButtonEvent")
+MouseButtonInfo = JavaClass("net.minecraft.client.input.MouseButtonInfo")
+MerchantScreen = JavaClass("net.minecraft.client.gui.screens.inventory.MerchantScreen")
+MerchantOffer = JavaClass("net.minecraft.world.item.trading.MerchantOffer")
+TradeOfferButton = JavaClass("net.minecraft.client.gui.screens.inventory.MerchantScreen$TradeOfferButton")
 
 bridge = Socket("127.0.0.1", """ + str(port) + r""")
 bridge.setSoTimeout(1)
 writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
 reader = BufferedReader(InputStreamReader(bridge.getInputStream(), StandardCharsets.UTF_8))
+gson = GsonBuilder().create()
+screen_change_queue = []
+guiScaleWidth = 1
+guiScaleHeight = 1
 
-def return_call(data):
+def return_call(ufcid,data):
     if data is None: data = "null"
     elif data is True: data = "true"
     elif data is False: data = "false"
-    writer.write(data + "\n")
+    writer.write(f"{ufcid}""" + '#' + r""":"+data + "\n")
     writer.flush()
 
 def serialize_stack(itemstack):
-    return GsonBuilder().create().toJson(ItemStack.CODEC.encodeStart(RegistryOps.create(JsonOps.INSTANCE, mc.level.registryAccess()), itemstack).getOrThrow())
+    return gson.toJson(ItemStack.CODEC.encodeStart(RegistryOps.create(JsonOps.INSTANCE, mc.level.registryAccess()), itemstack).getOrThrow())
+
+def serialize_offer(offer):
+    return gson.toJson(MerchantOffer.CODEC.encodeStart(RegistryOps.create(JsonOps.INSTANCE, mc.level.registryAccess()), offer).getOrThrow())
 
 def inventory(*_):
     out = []
@@ -84,7 +106,7 @@ def swap(slot1,slot2):
     mc.gameMode.""" + clicktype_mapping[0] + r"""(mc.player.containerMenu.containerId, slot1, slot2, ClickType.SWAP, mc.player)
 
 def open(*_):
-    mc.setScreen(InventoryScreen(mc.player))
+    mc""" + screen_mapping + r""".setScreen(InventoryScreen(mc.player))
 
 def close(*_):
     mc.player.closeContainer()
@@ -96,6 +118,53 @@ def get_item(slot):
     if str(itemstack) != "0 minecraft:air": return serialize_stack(itemstack)
     else: return '{"id":"minecraft:air","count":0}'
 
+def wait_for_gui_change(id):
+    screen_change_queue.append((id,mc""" + screen_mapping + r""".screen()))
+
+def use(*_):
+    player_press_use(True)
+    player_press_use(False)
+
+def get_buttons(*_):
+    buttons = []
+    for i, widget in enumerate(mc""" + screen_mapping + r""".screen().children()):
+        if isinstance(widget, AbstractButton):
+            buttons.append(widget.getMessage().getString())
+    return str(buttons)
+
+def press_button(id, button, modifiers):
+    id = int(id)
+    for i, widget in enumerate(mc""" + screen_mapping + r""".screen().children()):
+        if isinstance(widget, AbstractButton):
+            if i == id:
+                widget.onPress(MouseButtonEvent(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, MouseButtonInfo(int(button), int(modifiers))))
+
+def get_trades(*_):
+    offers = []
+    screen = mc""" + screen_mapping + r""".screen()
+    if isinstance(screen, MerchantScreen):
+        for offer in screen.getMenu().getOffers():
+            offers.append(serialize_offer(offer))
+    return str(offers)
+
+def select_offer(id, button, modifiers):
+    id = int(id)
+    screen = mc""" + screen_mapping + r""".screen()
+    if isinstance(screen, MerchantScreen):
+        menu = screen.getMenu()
+        i = -1
+        for widget in screen.children():
+            if isinstance(widget, TradeOfferButton):
+                i += 1
+                if i == id:
+                    widget.onPress(MouseButtonEvent(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, MouseButtonInfo(int(button), int(modifiers))))
+                    return
+        print("Not found!")
+
+def scroll_offers(by):
+    by = int(by)
+    mc""" + screen_mapping + r""".screen().mouseScrolled(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, 0, by)
+
 callables = {
 "inventory":inventory,
 "pickup":pickup,
@@ -104,16 +173,35 @@ callables = {
 "open":open,
 "get_item":get_item,
 "close":close,
-"throw":throw
+"throw":throw,
+"wait_for_gui_change":wait_for_gui_change,
+"use":use,
+"get_buttons":get_buttons,
+"press_button":press_button,
+"get_trades":get_trades,
+"select_offer":select_offer,
+"scroll_offers":scroll_offers
 }
 
 def frame(_):
+    global guiScaleWidth, guiScaleHeight
+    guiScaleWidth = mc.getWindow().getWidth() / mc.getWindow().getGuiScaledWidth()
+    guiScaleHeight = mc.getWindow().getHeight() / mc.getWindow().getGuiScaledHeight()
+    scrn = mc""" + screen_mapping + r""".screen()
+    i = -1
+    for id, screen in screen_change_queue.copy():
+        i += 1
+        if scrn != screen:
+            return_call(id,True)
+            screen_change_queue.pop(i)
     lines = []
     iters = 0
+    if not reader.ready(): return
     while True:
         iters += 1
         if iters > 100: log("[Lib_inv] Overloaded! Exiting reader...") ; break
         try:
+            if not reader.ready(): break
             line = reader.readLine()
             if line: lines.append(line)
             else: break
@@ -121,27 +209,51 @@ def frame(_):
             break
     for line in lines:
         cmd = line.split(":")
-        if cmd[0][0] == "R": return_call(callables[cmd[0][1:]](*cmd[1].split(",")))
+        if cmd[0][0] == "R":
+            ufcid, func = cmd[0].split(""" + '"#"' + r""")
+            return_call(ufcid[1:],callables[func](*cmd[1].split(",")))
+        elif cmd[0][0] == "A":
+            ufcid, func = cmd[0].split(""" + '"#"' + r""")
+            callables[func](ufcid[1:])
         else: callables[cmd[0][1:]](*cmd[1].split(","))
 
 add_event_listener("render",frame)
 """)
 
 conn, _ = bridge.accept()
-file = conn.makefile(mode="rw",encoding="utf-8")
+writer = conn.makefile(mode="w",encoding="utf-8")
+reader = conn.makefile(mode="r",encoding="utf-8")
 
-def await_function_call(func_name,*args):
-    file.write(f"R{func_name}:{",".join(args) if args else ""}\n")
-    file.flush()
+def __reader__():
     while True:
-        line = file.readline()
+        line = reader.readline()
         if not line: continue
-        else: break
-    return line[:-1]
+        ufcid, *data = line.split(":")
+        if ufcid in concurrent:
+            concurrent.pop(ufcid).set_result(":".join(data))
+
+Thread(target=__reader__,daemon=True).start()
+
+def next_ufcid():
+    return f"{get_ident()}@{uuid1()}#"
+
+def await_function_call(func_name,*args,awaited=False,timeout=None):
+    ufcid = next_ufcid()
+    future = Future()
+    concurrent[ufcid] = future
+    if not awaited: data = f"R{ufcid}{func_name}:{",".join(args) if args else ""}\n"
+    else: data = f"A{ufcid}{func_name}:{",".join(args) if args else ""}\n"
+    with writer_lock:
+        writer.write(data)
+        writer.flush()
+    try: return future.result(timeout=timeout)[:-1]
+    except TimeoutError: return None
 
 def noreturn_function_call(func_name,*args):
-    file.write(f"N{func_name}:{",".join(args) if args else ""}\n")
-    file.flush()
+    data = f"N{func_name}:{",".join(args) if args else ""}\n"
+    with writer_lock:
+        writer.write(data)
+        writer.flush()
 
 def inventory() -> list[dict]:
     """
@@ -190,3 +302,46 @@ def get_item(slot:int) -> dict:
     Get the item from a slot
     """
     return json.loads(await_function_call("get_item",str(slot)))
+
+def wait_for_screen_change(timeout=None):
+    """
+    Blocks untill the screen changes
+    """
+    return await_function_call("wait_for_gui_change",awaited=True,timeout=timeout) is True
+
+def open_targeted_container(timeout=None):
+    """
+    Attempts to open the targeted container
+    """
+    noreturn_function_call("use")
+    return wait_for_screen_change(timeout)
+
+def get_all_buttons():
+    """
+    Returns all clickeable buttons in the current gui
+    """
+    return json.loads(await_function_call("get_buttons"))
+
+def press_button(idx:int, mouse:int=0, modifiers:int=0):
+    """
+    Presses a button by index
+    """
+    noreturn_function_call("press_button",str(idx),str(mouse),str(modifiers))
+
+def get_trade_offers():
+    """
+    Returns all trade offers, or None if there arent any in the currently open gui
+    """
+    return json.loads(await_function_call("get_trades"))
+
+def select_trade_offer(idx:int, mouse:int=0, modifiers:int=0):
+    """
+    Selects a trade offer from index
+    """
+    noreturn_function_call("select_offer",str(idx),str(mouse),str(modifiers))
+
+def scroll_trade_offers(by:int):
+    """
+    Scrolls the trade selection sidebar
+    """
+    noreturn_function_call("scroll_offers",str(-by))
