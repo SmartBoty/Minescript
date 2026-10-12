@@ -55,6 +55,7 @@ Requirements:
 ### `select_trade_offer(idx:int, mouse:int=0, modifiers:int=0)`
 - Selects a trade offer, but doesnt buy it
 - Offer must be on screen
+- `idx` is not consistent with index returned from enumerating `get_trade_offers` (see example below to see how you can bypass this)
 
 ### `scroll_trade_offers(by:int)`
 - Scrolls the trade offers
