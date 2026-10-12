@@ -84,8 +84,10 @@ inv.open_targeted_container()
 sleep(0.2)
 for slot, item in enumerate(inv.inventory()):
     if item["id"] == "minecraft:iron_ingot":
-        inv.quickmove(slot)
+        inv.pickup(slot)
         break
+inv.pickup(0,1)
+inv.pickup(slot)
 sleep(0.2)
 inv.press_button(0) # Button for the "Speed 1" effect
 for i, button in enumerate(inv.get_all_buttons()):
