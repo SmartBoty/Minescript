@@ -23,10 +23,24 @@ Requirements:
 - Simulate a throw action on a slot
 - if `stack` is true, drop a whole stack
 
-### `open()`
+### `quick_craft(slot:int, action:int=0)`
+- Performs a quick craft action on a slot
+- Its probably not what you think, it is mostly used to spread items evenly across many slots (see example below)
+
+### `pickup_all(slot:int, direction:int=0)`
+- Performs a pickup all action on a slot
+- `direction` determines which order minecraft scans the inventory slots for matching items
+
+### `get_slot_at(x:int, y:int) -> dict`
+- Returns the item in a slot at `x` and `y` screen coordinates
+
+### `get_cursor_item() -> dict`
+- Returns the item in the cursor
+
+### `open_inventory()`
 - Opens up the players inventory
 
-### `close()`
+### `close_inventory()`
 - Closes any open gui
 
 ### `get_item(slot) -> dict`
@@ -60,16 +74,57 @@ Requirements:
 ### `scroll_trade_offers(by:int)`
 - Scrolls the trade offers
 
+## Helper classes
+
+### `QuickCraft`
+- Helper class containing mapped QUICK_CRAFT actions
+```
+# LMB drag
+BEGIN_EVEN
+ADD_EVEN
+END_EVEN
+
+# RMB drag
+BEGIN_SINGLE
+ADD_SINGLE
+END_SINGLE
+
+# MMB drag (creative only)
+BEGIN_CLONE
+ADD_CLONE
+END_CLONE
+```
+
+### `PickupAll`
+- Helper class containing mapped PICKUP_ALL directions
+```
+# Default
+FIRST_TO_LAST
+
+# Reversed
+LAST_TO_FIRST
+```
+
+### `Slots`
+- Helper class containing notable slots
+```
+NULL
+OUTSIDE # "Outside of inventory"
+```
+
 ## Example usages
 The following script will dump all diamonds from your inventory into the targeted chest
 ```py
 import lib_inv as inv
 from system.lib.minescript import player_press_use, player_get_targeted_block
 import sys
+from time import sleep
 
 if "chest" not in player_get_targeted_block().type: sys.exit("Please look at a chest")
 player_press_use(True)
 player_press_use(False)
+
+sleep(0.2)
 
 for slot, item in enumerate(inv.inventory()):
     if item["id"] == "minecraft:diamond":
@@ -108,5 +163,29 @@ for i, offer in enumerate(inv.get_trade_offers()):
     inv.select_trade_offer(min(i,6))
     sleep(0.2)
 sleep(1)
-inv.close()
+inv.close_inventory()
+```
+This will open up your inventory, spread the item in slot `9` (top left slot) across your inventory evenly, then collect it back into the same slot
+```py
+from lib_inv import *
+from time import sleep
+
+open_inventory()
+sleep(0.2)
+
+pickup(9)
+sleep(0.5)
+quick_craft(Slots.NULL, QuickCraft.BEGIN_EVEN)
+for slot in range(9, 18):
+    quick_craft(slot, QuickCraft.ADD_EVEN)
+quick_craft(Slots.NULL, QuickCraft.END_EVEN)
+sleep(0.5)
+pickup(9)
+
+sleep(0.5)
+pickup(9)
+sleep(0.5)
+pickup_all(9)
+sleep(0.5)
+pickup(9)
 ```
