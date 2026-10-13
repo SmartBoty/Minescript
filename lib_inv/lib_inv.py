@@ -1,39 +1,40 @@
-debug = False
+TYPE_CHECKING = True
+TYPE_CHECKING = not TYPE_CHECKING
+if not TYPE_CHECKING:
+    import socket
+    from system.lib.java import eval_pyjinn_script as eps
+    import json
+    from threading import Thread, get_ident, Lock
+    from system.lib.minescript import version_info
+    from uuid import uuid1
+    from concurrent.futures import Future, TimeoutError
 
-import socket
-from system.lib.java import eval_pyjinn_script as eps
-import json
-from threading import Thread, get_ident, Lock
-from system.lib.minescript import version_info
-from uuid import uuid1
-from concurrent.futures import Future, TimeoutError
+    version = int("".join([n for n in version_info().minecraft if n.isdigit()]))
 
-version = int("".join([n for n in version_info().minecraft if n.isdigit()]))
+    if not str(version).startswith("1"): version = int("99"+str(version))
 
-if not str(version).startswith("1"): version = int("99"+str(version))
-
-version_mappings = {
-    "clicktype_const": {
-        (0,12111) : ("handleInventoryMouseClick","""ClickType = JavaClass("net.minecraft.world.inventory.ClickType")"""),
-        (99262,999999): ("handleContainerInput","""ClickType = JavaClass("net.minecraft.world.inventory.ContainerInput")""")
-    },
-    "screen_const": {
-        (0,12111) : "",
-        (99262,999999): ".gui"
+    version_mappings = {
+        "clicktype_const": {
+            (0,12111) : ("handleInventoryMouseClick","""ClickType = JavaClass("net.minecraft.world.inventory.ClickType")"""),
+            (99262,999999): ("handleContainerInput","""ClickType = JavaClass("net.minecraft.world.inventory.ContainerInput")""")
+        },
+        "screen_const": {
+            (0,12111) : "",
+            (99262,999999): ".gui"
+        }
     }
-}
 
-clicktype_mapping = [v for k,v in version_mappings["clicktype_const"].items() if k[0] <= version <= k[1]][0]
-screen_mapping = [v for k,v in version_mappings["screen_const"].items() if k[0] <= version <= k[1]][0]
-concurrent = {}
-writer_lock = Lock()
+    clicktype_mapping = [v for k,v in version_mappings["clicktype_const"].items() if k[0] <= version <= k[1]][0]
+    screen_mapping = [v for k,v in version_mappings["screen_const"].items() if k[0] <= version <= k[1]][0]
+    concurrent = {}
+    writer_lock = Lock()
 
-bridge = socket.socket()
-bridge.bind(("127.0.0.1", 0))
-bridge.listen(1)
-port = bridge.getsockname()[1]
+    bridge = socket.socket()
+    bridge.bind(("127.0.0.1", 0))
+    bridge.listen(1)
+    port = bridge.getsockname()[1]
 
-eps(
+    eps(
 r"""
 mc = JavaClass("net.minecraft.client.Minecraft").getInstance()
 ItemStack = JavaClass("net.minecraft.world.item.ItemStack")
@@ -54,6 +55,9 @@ MouseButtonInfo = JavaClass("net.minecraft.client.input.MouseButtonInfo")
 MerchantScreen = JavaClass("net.minecraft.client.gui.screens.inventory.MerchantScreen")
 MerchantOffer = JavaClass("net.minecraft.world.item.trading.MerchantOffer")
 TradeOfferButton = JavaClass("net.minecraft.client.gui.screens.inventory.MerchantScreen$TradeOfferButton")
+AbstractContainerScreen = JavaClass("net.minecraft.client.gui.screens.inventory.AbstractContainerScreen")
+Array = JavaClass("java.lang.reflect.Array")
+Object = JavaClass("java.lang.Object")
 
 bridge = Socket("127.0.0.1", """ + str(port) + r""")
 bridge.setSoTimeout(1)
@@ -63,6 +67,14 @@ gson = GsonBuilder().create()
 screen_change_queue = []
 guiScaleWidth = 1
 guiScaleHeight = 1
+getHoveredSlot = [m for m in type(AbstractContainerScreen).getDeclaredMethods() if m.getName() == "getHoveredSlot"][0]
+getHoveredSlot.setAccessible(True)
+
+def as_array(items,specific_type=Object):
+    array = Array.newInstance(type(specific_type),len(items))
+    for i,arg in enumerate(items):
+        Array.set(array, i, arg)
+    return array
 
 def return_call(ufcid,data):
     if data is None: data = "null"
@@ -83,7 +95,7 @@ def inventory(*_):
         itemstack = slot.getItem()
         if str(itemstack) != "0 minecraft:air": out.append(serialize_stack(itemstack))
         else: out.append('{"id":"minecraft:air","count":0}')
-    return "[" + ", ".join(out) + "]"
+    return "[" + ",".join(out) + "]"
 
 def pickup(slot,mouse):
     slot = int(slot)
@@ -105,6 +117,16 @@ def swap(slot1,slot2):
     slot2 = int(slot2)
     mc.gameMode.""" + clicktype_mapping[0] + r"""(mc.player.containerMenu.containerId, slot1, slot2, ClickType.SWAP, mc.player)
 
+def quick_craft(slot, action):
+    slot = int(slot)
+    action = int(action)
+    mc.gameMode.""" + clicktype_mapping[0] + r"""(mc.player.containerMenu.containerId, slot, action, ClickType.QUICK_CRAFT, mc.player)
+
+def pickup_all(slot, action):
+    slot = int(slot)
+    action = int(action)
+    mc.gameMode.""" + clicktype_mapping[0] + r"""(mc.player.containerMenu.containerId, slot, action, ClickType.PICKUP_ALL, mc.player)
+
 def open(*_):
     mc""" + screen_mapping + r""".setScreen(InventoryScreen(mc.player))
 
@@ -113,8 +135,10 @@ def close(*_):
 
 def get_item(slot):
     _slot = int(slot)
+    i = -1
     for slot in mc.player.containerMenu.slots:
-        if slot.getContainerSlot() == _slot: itemstack = slot.getItem()
+        i += 1
+        if i == _slot: itemstack = slot.getItem()
     if str(itemstack) != "0 minecraft:air": return serialize_stack(itemstack)
     else: return '{"id":"minecraft:air","count":0}'
 
@@ -164,6 +188,20 @@ def scroll_offers(by):
     by = int(by)
     mc""" + screen_mapping + r""".screen().mouseScrolled(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, 0, by)
 
+def get_slot_at(x,y):
+    x = int(x) / guiScaleWidth
+    y = int(y) / guiScaleHeight
+    slot = getHoveredSlot.invoke(mc""" + screen_mapping + r""".screen(),as_array((x,y)))
+    if slot is None: return '{"id":"minecraft:air","count":0}'
+    itemstack = slot.getItem()
+    if str(itemstack) != "0 minecraft:air": return serialize_stack(itemstack)
+    else: return '{"id":"minecraft:air","count":0}'
+
+def get_cursor(*_):
+    itemstack = mc.player.containerMenu.getCarried()
+    if str(itemstack) != "0 minecraft:air": return serialize_stack(itemstack)
+    else: return '{"id":"minecraft:air","count":0}'
+
 callables = {
 "inventory":inventory,
 "pickup":pickup,
@@ -179,7 +217,11 @@ callables = {
 "press_button":press_button,
 "get_trades":get_trades,
 "select_offer":select_offer,
-"scroll_offers":scroll_offers
+"scroll_offers":scroll_offers,
+"get_slot_at":get_slot_at,
+"get_cursor":get_cursor,
+"quick_craft":quick_craft,
+"pickup_all":pickup_all
 }
 
 def frame(_):
@@ -219,40 +261,42 @@ def frame(_):
 add_event_listener("render",frame)
 """)
 
-conn, _ = bridge.accept()
-writer = conn.makefile(mode="w",encoding="utf-8")
-reader = conn.makefile(mode="r",encoding="utf-8")
+    conn, _ = bridge.accept()
+    writer = conn.makefile(mode="w",encoding="utf-8")
+    reader = conn.makefile(mode="r",encoding="utf-8")
 
-def __reader__():
-    while True:
-        line = reader.readline()
-        if not line: continue
-        ufcid, *data = line.split(":")
-        if ufcid in concurrent:
-            concurrent.pop(ufcid).set_result(":".join(data))
+    def __reader__():
+        while True:
+            line = reader.readline()
+            if not line: continue
+            ufcid, *data = line.split(":")
+            if ufcid in concurrent:
+                concurrent.pop(ufcid).set_result(":".join(data))
 
-Thread(target=__reader__,daemon=True).start()
+    Thread(target=__reader__,daemon=True).start()
 
-def next_ufcid():
-    return f"{get_ident()}@{uuid1()}#"
+    def next_ufcid():
+        return f"{get_ident()}@{uuid1()}#"
 
-def await_function_call(func_name,*args,awaited=False,timeout=None):
-    ufcid = next_ufcid()
-    future = Future()
-    concurrent[ufcid] = future
-    if not awaited: data = f"R{ufcid}{func_name}:{",".join(args) if args else ""}\n"
-    else: data = f"A{ufcid}{func_name}:{",".join(args) if args else ""}\n"
-    with writer_lock:
-        writer.write(data)
-        writer.flush()
-    try: return future.result(timeout=timeout)[:-1]
-    except TimeoutError: return None
+    def await_function_call(func_name,*args,awaited=False,timeout=None):
+        ufcid = next_ufcid()
+        future = Future()
+        concurrent[ufcid] = future
+        if not awaited: data = f"R{ufcid}{func_name}:{",".join(args) if args else ""}\n"
+        else: data = f"A{ufcid}{func_name}:{",".join(args) if args else ""}\n"
+        with writer_lock:
+            writer.write(data)
+            writer.flush()
+        try: return future.result(timeout=timeout)[:-1]
+        except TimeoutError: return None
 
-def noreturn_function_call(func_name,*args):
-    data = f"N{func_name}:{",".join(args) if args else ""}\n"
-    with writer_lock:
-        writer.write(data)
-        writer.flush()
+    def noreturn_function_call(func_name,*args):
+        data = f"N{func_name}:{",".join(args) if args else ""}\n"
+        with writer_lock:
+            writer.write(data)
+            writer.flush()
+
+del TYPE_CHECKING
 
 def inventory() -> list[dict]:
     """
@@ -284,13 +328,27 @@ def throw(slot:int,stack:bool=False):
     """
     noreturn_function_call("throw",str(slot),str(1 if stack else 0))
 
-def open():
+def quick_craft(slot:int, action:int=0):
+    """
+    Simulates a quick craft action on a slot
+    """
+    noreturn_function_call("quick_craft",str(slot),str(action))
+
+def pickup_all(slot:int, direction:int=0):
+    """
+    Performs a pickup all action on a slot
+
+    `direction` determines which order minecraft scans the inventory slots for matching items
+    """
+    noreturn_function_call("pickup_all",str(slot),str(direction))
+
+def open_inventory():
     """
     Opens up the players inventory
     """
     noreturn_function_call("open")
 
-def close():
+def close_inventory():
     """
     Closes any open gui
     """
@@ -344,3 +402,70 @@ def scroll_trade_offers(by:int):
     Scrolls the trade selection sidebar
     """
     noreturn_function_call("scroll_offers",str(-by))
+
+def get_slot_at(x:int, y:int) -> dict:
+    """
+    Returns the item from a slot at a certain screen pixel coordinate
+    """
+    return json.loads(await_function_call("get_slot_at",str(x),str(y)))
+
+def get_cursor_item() -> dict:
+    """
+    Returns the item at the cursor
+    """
+    return json.loads(await_function_call("get_cursor"))
+
+class QuickCraft:
+    """
+    Helper class containing mapped QUICK_CRAFT actions
+    """
+    BEGIN_EVEN = 0
+    ADD_EVEN = 1
+    END_EVEN = 2
+
+    BEGIN_SINGLE = 4
+    ADD_SINGLE = 5
+    END_SINGLE = 6
+
+    BEGIN_CLONE = 8
+    ADD_CLONE = 9
+    END_CLONE = 10
+
+class PickupAll:
+    """
+    Helper class containing mapped PICKUP_ALL directions
+    """
+    FIRST_TO_LAST = 0
+    LAST_TO_FIRST = 1
+
+class Slots:
+    """
+    Helper class containing notable slots
+    """
+    NULL = -999
+    OUTSIDE = -999
+
+__all__ = [
+    "inventory",
+    "pickup",
+    "quickmove",
+    "swap",
+    "throw",
+    "quick_craft",
+    "pickup_all",
+    "open_inventory",
+    "close_inventory",
+    "get_item",
+    "wait_for_screen_change",
+    "open_targeted_container",
+    "get_all_buttons",
+    "press_button",
+    "get_trade_offers",
+    "select_trade_offer",
+    "scroll_trade_offers",
+    "get_slot_at",
+    "get_cursor_item",
+    "QuickCraft",
+    "PickupAll",
+    "Slots"
+]
