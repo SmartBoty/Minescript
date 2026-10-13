@@ -159,7 +159,6 @@ def select_offer(id, button, modifiers):
                 if i == id:
                     widget.onPress(MouseButtonEvent(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, MouseButtonInfo(int(button), int(modifiers))))
                     return
-        print("Not found!")
 
 def scroll_offers(by):
     by = int(by)
