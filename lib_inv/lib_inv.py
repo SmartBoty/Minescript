@@ -1,26 +1,29 @@
 TYPE_CHECKING = True
 TYPE_CHECKING = not TYPE_CHECKING
 if not TYPE_CHECKING:
+    from system.lib.minescript import version_info
+    import sys
+    verinf = version_info()
+    version = tuple(map(int, verinf.minecraft.split(".")))
+    if len(version) < 3:
+        version += (0,) * (3 - len(version))
+    if not verinf.minescript.startswith("5.0"): sys.exit("[Lib_inv] Please update to minescript 5.0b+!")
+
     import socket
     from system.lib.java import eval_pyjinn_script as eps
     import json
     from threading import Thread, get_ident, Lock
-    from system.lib.minescript import version_info
     from uuid import uuid1
     from concurrent.futures import Future, TimeoutError
 
-    version = int("".join([n for n in version_info().minecraft if n.isdigit()]))
-
-    if not str(version).startswith("1"): version = int("99"+str(version))
-
     version_mappings = {
         "clicktype_const": {
-            (0,12111) : ("handleInventoryMouseClick","""ClickType = JavaClass("net.minecraft.world.inventory.ClickType")"""),
-            (99262,999999): ("handleContainerInput","""ClickType = JavaClass("net.minecraft.world.inventory.ContainerInput")""")
+            ((0,0,0),(1,21,11)): ("handleInventoryMouseClick","ClickType = JavaClass(\"net.minecraft.world.inventory.ClickType\")"),
+            ((26,1,0),(99,99,99)): ("handleContainerInput","ClickType = JavaClass(\"net.minecraft.world.inventory.ContainerInput\")")
         },
         "screen_const": {
-            (0,12111) : "",
-            (99262,999999): ".gui"
+            ((0,0,0),(26,1,2)): "",
+            ((26,2,0),(99,99,99)): ".gui"
         }
     }
 
@@ -295,8 +298,6 @@ add_event_listener("render",frame)
         with writer_lock:
             writer.write(data)
             writer.flush()
-
-del TYPE_CHECKING
 
 def inventory() -> list[dict]:
     """
