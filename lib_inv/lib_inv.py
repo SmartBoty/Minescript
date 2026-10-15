@@ -22,8 +22,8 @@ if not TYPE_CHECKING:
             ((26,1,0),(99,99,99)): ("handleContainerInput","ClickType = JavaClass(\"net.minecraft.world.inventory.ContainerInput\")")
         },
         "screen_const": {
-            ((0,0,0),(26,1,2)): "",
-            ((26,2,0),(99,99,99)): ".gui"
+            ((0,0,0),(26,1,2)): ("",".screen"),
+            ((26,2,0),(99,99,99)): (".gui",".gui.screen()")
         }
     }
 
@@ -131,7 +131,7 @@ def pickup_all(slot, action):
     mc.gameMode.""" + clicktype_mapping[0] + r"""(mc.player.containerMenu.containerId, slot, action, ClickType.PICKUP_ALL, mc.player)
 
 def open(*_):
-    mc""" + screen_mapping + r""".setScreen(InventoryScreen(mc.player))
+    mc""" + screen_mapping[0] + r""".setScreen(InventoryScreen(mc.player))
 
 def close(*_):
     mc.player.closeContainer()
@@ -146,7 +146,7 @@ def get_item(slot):
     else: return '{"id":"minecraft:air","count":0}'
 
 def wait_for_gui_change(id):
-    screen_change_queue.append((id,mc""" + screen_mapping + r""".screen()))
+    screen_change_queue.append((id,mc""" + screen_mapping[1] + r"""))
 
 def use(*_):
     player_press_use(True)
@@ -154,21 +154,21 @@ def use(*_):
 
 def get_buttons(*_):
     buttons = []
-    for i, widget in enumerate(mc""" + screen_mapping + r""".screen().children()):
+    for i, widget in enumerate(mc""" + screen_mapping[1] + r""".children()):
         if isinstance(widget, AbstractButton):
             buttons.append(widget.getMessage().getString())
     return str(buttons)
 
 def press_button(id, button, modifiers):
     id = int(id)
-    for i, widget in enumerate(mc""" + screen_mapping + r""".screen().children()):
+    for i, widget in enumerate(mc""" + screen_mapping[1] + r""".children()):
         if isinstance(widget, AbstractButton):
             if i == id:
                 widget.onPress(MouseButtonEvent(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, MouseButtonInfo(int(button), int(modifiers))))
 
 def get_trades(*_):
     offers = []
-    screen = mc""" + screen_mapping + r""".screen()
+    screen = mc""" + screen_mapping[1] + r"""
     if isinstance(screen, MerchantScreen):
         for offer in screen.getMenu().getOffers():
             offers.append(serialize_offer(offer))
@@ -176,7 +176,7 @@ def get_trades(*_):
 
 def select_offer(id, button, modifiers):
     id = int(id)
-    screen = mc""" + screen_mapping + r""".screen()
+    screen = mc""" + screen_mapping[1] + r"""
     if isinstance(screen, MerchantScreen):
         menu = screen.getMenu()
         i = -1
@@ -189,12 +189,12 @@ def select_offer(id, button, modifiers):
 
 def scroll_offers(by):
     by = int(by)
-    mc""" + screen_mapping + r""".screen().mouseScrolled(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, 0, by)
+    mc""" + screen_mapping[1] + r""".mouseScrolled(mc.mouseHandler.xpos()/guiScaleWidth, mc.mouseHandler.ypos()/guiScaleHeight, 0, by)
 
 def get_slot_at(x,y):
     x = int(x) / guiScaleWidth
     y = int(y) / guiScaleHeight
-    slot = getHoveredSlot.invoke(mc""" + screen_mapping + r""".screen(),as_array((x,y)))
+    slot = getHoveredSlot.invoke(mc""" + screen_mapping[1] + r""",as_array((x,y)))
     if slot is None: return '{"id":"minecraft:air","count":0}'
     itemstack = slot.getItem()
     if str(itemstack) != "0 minecraft:air": return serialize_stack(itemstack)
@@ -231,7 +231,7 @@ def frame(_):
     global guiScaleWidth, guiScaleHeight
     guiScaleWidth = mc.getWindow().getWidth() / mc.getWindow().getGuiScaledWidth()
     guiScaleHeight = mc.getWindow().getHeight() / mc.getWindow().getGuiScaledHeight()
-    scrn = mc""" + screen_mapping + r""".screen()
+    scrn = mc""" + screen_mapping[1] + r"""
     i = -1
     for id, screen in screen_change_queue.copy():
         i += 1
