@@ -29,7 +29,7 @@ Download redirect: [eventlib.py](https://smartboty.github.io/Minescript/?file=ev
 Example usage:
 ```py
 from system.lib.minescript import EventType, EventQueue, echo, execute
-from eventlib import * # Put it anywhere before instancing event queue ("EventQueue()")
+from eventlib import * # Must be after importing minescript
 
 events = EventQueue()
 events.register_incoming_chat_interceptor(startswith="+")
