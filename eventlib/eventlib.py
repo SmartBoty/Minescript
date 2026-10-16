@@ -1,18 +1,15 @@
 import sys
 import os
 from pathlib import Path
+import system.lib.minescript as m
 
 minescript_path = Path(os.getcwd()) / "minescript" / "system" / "lib" / "minescript.py"
 candidates = [i for i in sys.modules if ("minescript" in i and "runtime" not in i)]
+modules = []
 if candidates:
     for module in candidates:
         if Path(sys.modules[module].__file__).samefile(minescript_path):
-            m = sys.modules[module]
-            break
-else:
-    import system.lib.minescript as m
-    sys.modules["minescript"] = m
-
+            modules.append(sys.modules[module])
 
 verinf = m.version_info()
 if verinf.minescript.startswith("5.0"):
@@ -32,7 +29,7 @@ version_mappings = {
         ((1,21,9),(99,99,99)): ("KeyEvent(event.key,event.scan_code,event.modifiers)","""KeyEvent = JavaClass("net.minecraft.client.input.KeyEvent")""")
     },
     "hud_const": {
-        ((0,0,0),(26,1,0)) : "mc.gui",
+        ((0,0,0),(26,1,2)) : "mc.gui",
         ((26,2,0),(99,99,99)): "mc.gui.hud"
     }
 }
@@ -445,33 +442,6 @@ class EventlibOutgoingChatIntercept:
     time:float
     message:str
 
-m.EventType.INCOMING_CHAT_INTERCEPT = "incoming_chat_intercept"
-m._EVENT_CONSTRUCTORS["incoming_chat_intercept"] = INCOMING_CHAT_INTERCEPT
-
-m.EventType.ENTITY_TOTEM_POPPED = "entity_totem_popped"
-m._EVENT_CONSTRUCTORS["entity_totem_popped"] = ENTITY_TOTEM_POPPED
-
-m.EventType.ENTITY_DIED = "entity_died"
-m._EVENT_CONSTRUCTORS["entity_died"] = ENTITY_DIED
-
-m.EventType.SERVER_PARTICLE = "server_particle"
-m._EVENT_CONSTRUCTORS["server_particle"] = SERVER_PARTICLE
-
-m.EventType.CLIENT_TICK = "client_tick"
-m._EVENT_CONSTRUCTORS["client_tick"] = CLIENT_TICK
-
-m.EventType.HEALTH_CHANGE = "health_change"
-m._EVENT_CONSTRUCTORS["health_change"] = HEALTH_CHANGE
-
-m.EventType.FOOD_CHANGE = "food_change"
-m._EVENT_CONSTRUCTORS["food_change"] = FOOD_CHANGE
-
-m.EventType.ACTIONBAR_CHANGE = "actionbar_change"
-m._EVENT_CONSTRUCTORS["actionbar_change"] = ACTIONBAR_CHANGE
-
-m.EventType.COMMAND_INTERCEPT = "command_intercept"
-m._EVENT_CONSTRUCTORS["command_intercept"] = COMMAND_INTERCEPT
-
 def register_incoming_chat_interceptor(self,*,startswith:str=""):
     execute(fr"""\eval '0' '__script__.vars["game"]["eventlib"]["{identifier}"]["intercept_incoming_chat"] = {"{"}"state":True,"startswith":"{startswith}"{"}"}'""")
     self.eventlib_listeners.append("intercept_incoming_chat")
@@ -557,24 +527,52 @@ def unregister_all(self):
     for listener_id in listener_ids:
       m._unregister_event_handler(listener_id)
 
-m.EventQueue.register_incoming_chat_interceptor = register_incoming_chat_interceptor
-m.EventQueue.register_totem_popped_listener = register_totem_popped_listener
-m.EventQueue.register_entity_died_listener = register_entity_died_listener
-m.EventQueue.register_server_particle_listener = register_server_particle_listener
-m.EventQueue.register_client_tick_listener = register_client_tick_listener
-m.EventQueue.register_health_change_listener = register_health_change_listener
-m.EventQueue.register_food_change_listener = register_food_change_listener
-m.EventQueue.register_actionbar_change_listener = register_actionbar_change_listener
-m.EventQueue.register_chat_listener = eventlib_register_chat_listener
-m.EventQueue.register_key_listener = eventlib_register_key_listener
-m.EventQueue.register_command_interceptor = register_command_interceptor
-m.EventQueue.register_outgoing_chat_interceptor = eventlib_register_outgoing_chat_interceptor
-m._EVENT_CONSTRUCTORS["chat"] = EventlibChatEvent
-m._EVENT_CONSTRUCTORS["key"] = EventlibKeyEvent
-m._EVENT_CONSTRUCTORS["outgoing_chat_intercept"] = EventlibOutgoingChatIntercept
+for module in modules:
+    module.EventType.INCOMING_CHAT_INTERCEPT = "incoming_chat_intercept"
+    module._EVENT_CONSTRUCTORS["incoming_chat_intercept"] = INCOMING_CHAT_INTERCEPT
 
-m.EventQueue.unregister_all = unregister_all
-m.EventQueue.eventlib_listeners = []
+    module.EventType.ENTITY_TOTEM_POPPED = "entity_totem_popped"
+    module._EVENT_CONSTRUCTORS["entity_totem_popped"] = ENTITY_TOTEM_POPPED
+
+    module.EventType.ENTITY_DIED = "entity_died"
+    module._EVENT_CONSTRUCTORS["entity_died"] = ENTITY_DIED
+
+    module.EventType.SERVER_PARTICLE = "server_particle"
+    module._EVENT_CONSTRUCTORS["server_particle"] = SERVER_PARTICLE
+
+    module.EventType.CLIENT_TICK = "client_tick"
+    module._EVENT_CONSTRUCTORS["client_tick"] = CLIENT_TICK
+
+    module.EventType.HEALTH_CHANGE = "health_change"
+    module._EVENT_CONSTRUCTORS["health_change"] = HEALTH_CHANGE
+
+    module.EventType.FOOD_CHANGE = "food_change"
+    module._EVENT_CONSTRUCTORS["food_change"] = FOOD_CHANGE
+
+    module.EventType.ACTIONBAR_CHANGE = "actionbar_change"
+    module._EVENT_CONSTRUCTORS["actionbar_change"] = ACTIONBAR_CHANGE
+
+    module.EventType.COMMAND_INTERCEPT = "command_intercept"
+    module._EVENT_CONSTRUCTORS["command_intercept"] = COMMAND_INTERCEPT
+
+    module.EventQueue.register_incoming_chat_interceptor = register_incoming_chat_interceptor
+    module.EventQueue.register_totem_popped_listener = register_totem_popped_listener
+    module.EventQueue.register_entity_died_listener = register_entity_died_listener
+    module.EventQueue.register_server_particle_listener = register_server_particle_listener
+    module.EventQueue.register_client_tick_listener = register_client_tick_listener
+    module.EventQueue.register_health_change_listener = register_health_change_listener
+    module.EventQueue.register_food_change_listener = register_food_change_listener
+    module.EventQueue.register_actionbar_change_listener = register_actionbar_change_listener
+    module.EventQueue.register_chat_listener = eventlib_register_chat_listener
+    module.EventQueue.register_key_listener = eventlib_register_key_listener
+    module.EventQueue.register_command_interceptor = register_command_interceptor
+    module.EventQueue.register_outgoing_chat_interceptor = eventlib_register_outgoing_chat_interceptor
+    module._EVENT_CONSTRUCTORS["chat"] = EventlibChatEvent
+    module._EVENT_CONSTRUCTORS["key"] = EventlibKeyEvent
+    module._EVENT_CONSTRUCTORS["outgoing_chat_intercept"] = EventlibOutgoingChatIntercept
+
+    module.EventQueue.unregister_all = unregister_all
+    module.EventQueue.eventlib_listeners = []
 
 if TYPE_CHECKING:
     class Event:
