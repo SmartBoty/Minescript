@@ -165,6 +165,7 @@ def __serve_listener__():
 
 script = eps(
 r"""
+import atexit
 mc = JavaClass("net.minecraft.client.Minecraft").getInstance()
 ClientboundPlayerChatPacket = JavaClass("net.minecraft.network.protocol.game.ClientboundPlayerChatPacket")
 ClientboundSystemChatPacket = JavaClass("net.minecraft.network.protocol.game.ClientboundSystemChatPacket")
@@ -311,12 +312,11 @@ def frame(_):
         if len(msgs) > 1:
             i = 1
             while msgs[i] != last_chat:
-                i += 1
                 if i > len(msgs): break
-                new.append(msgs[i-1].content())
+                new.append(msgs[i].content())
+                i += 1
         last_chat = msgs[0]
     if new:
-        log(f"New messages: {len(new)}")
         if __script__.vars["game"]["eventlib"][identifier]["chat_listener"]:
             for comp in reverse(new):
                 dat = comp.getString()
@@ -328,6 +328,10 @@ add_event_listener("clientbound_packet",s2c)
 add_event_listener("key",key_event)
 add_event_listener("serverbound_packet",c2s)
 add_event_listener("render",frame)
+
+def cleanup():
+    del __script__.vars["game"]["eventlib"][identifier]
+atexit.register(cleanup)
 """)
 conn, _ = bridge.accept()
 file = conn.makefile(encoding="utf-8")
