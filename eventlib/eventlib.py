@@ -217,7 +217,8 @@ writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCha
 hp = player_health()
 food = [mc.player.getFoodData().getFoodLevel(),mc.player.getFoodData().getSaturationLevel()]
 ab_timestamp_predicted = reflect_field(""" + hud_mapping + r""","overlayMessageTime")
-chatlength = len(list(reflect_field(""" + hud_mapping + r""".getChat(), "allMessages")))
+last_chat = list(reflect_field(""" + hud_mapping + r""".getChat(), "allMessages"))
+last_chat = last_chat[0] if last_chat else None
 
 def add_event(event):
     writer.write(event.replace("\n",r"\n") + "\n")
@@ -302,19 +303,25 @@ def tick(event):
         ab_timestamp_predicted = time
 
 def frame(_):
-    global chatlength
+    global last_chat
     msgs = list(reflect_field(""" + hud_mapping + r""".getChat(), "allMessages"))
     new = []
-    if len(msgs) > chatlength:
-        for i in range(len(msgs)- chatlength):
-            new.append(msgs[i].content())
-        chatlength = len(msgs)
+    if msgs and msgs[0] != last_chat:
+        new.append(msgs[0].content())
+        if len(msgs) > 1:
+            i = 1
+            while msgs[i] != last_chat:
+                i += 1
+                if i > len(msgs): break
+                new.append(msgs[i-1].content())
+        last_chat = msgs[0]
+    if new:
+        log(f"New messages: {len(new)}")
         if __script__.vars["game"]["eventlib"][identifier]["chat_listener"]:
             for comp in reverse(new):
                 dat = comp.getString()
                 json_string = GsonBuilder().create().toJson(ComponentSerialization.CODEC.encodeStart(RegistryOps.create(JsonOps.INSTANCE, mc.level.registryAccess()),comp).getOrThrow())
                 add_event('{"event":"chat_event","text":"' + sanitize_string(dat) + '","json":' + json_string + '}')
-    elif len(msgs) < chatlength-1: chatlength = len(msgs)
 
 add_event_listener("tick",tick)
 add_event_listener("clientbound_packet",s2c)
