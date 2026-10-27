@@ -12,6 +12,7 @@ As of now, it contains:
 - `FOOD_CHANGE`
 - `ACTIONBAR_CHANGE`
 - `COMMAND_INTERCEPT`
+- `TITLE_CHANGE`
 
 And also updated:
 - `ChatEvent` -> Optionally populate `.json`
@@ -41,6 +42,8 @@ events.register_health_change_listener()
 events.register_food_change_listener()
 events.register_actionbar_change_listener()
 events.register_command_interceptor()
+events.register_title_change_listener()
+
 
 events.register_chat_listener(eventlib=True) # Enables the .json value on the event
 events.register_key_listener(eventlib=True) # Enables the .pretty_key value on the event
@@ -78,4 +81,9 @@ while True:
             execute("/say This was not intercepted!")
     if event.type == EventType.OUTGOING_CHAT_INTERCEPT:
         echo(f";Intercepted: {event.message}")
+    if event.type == EventType.TITLE_CHANGE:
+        echo(f";{event.title}")
+        echo(f";{event.title_json}")
+        echo(f";{event.subtitle}")
+        echo(f";{event.subtitle_json}")
 ```
