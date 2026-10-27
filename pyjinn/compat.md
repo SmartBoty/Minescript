@@ -1,5 +1,5 @@
 ## **ACLoPLFSBP**
-- *A Comprehensive list of Python Language Features Supported By Pyjinn* (in no particular order)
+- *A Comprehensive List of Python Language Features Supported By Pyjinn* (in no particular order)
 
 Target pyjinn version: `Pyjinn 0.14` (`\eval version_info().pyjinn`)
 
