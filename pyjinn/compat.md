@@ -3,14 +3,14 @@
 
 Target pyjinn version: `Pyjinn 0.14` (`\eval version_info().pyjinn`)
 
-- [Compatibilities](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#compatibilities)
-- [Incompatibilities](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#incompatibilities)
+- [Compatibilities](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#compatibilities)
+- [Incompatibilities](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#incompatibilities)
 
 ## Compatibilities
-- [Supported builtin libraries](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#supported-builtin-libraries)
-- [Supported language features](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#supported-language-features)
-- [Supported global variables](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#supported-global-variables)
-- [Known Supported dunders](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#known-supported-dunders)
+- [Supported builtin libraries](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#supported-builtin-libraries)
+- [Supported language features](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#supported-language-features)
+- [Supported global variables](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#supported-global-variables)
+- [Known Supported dunders](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#known-supported-dunders)
 ### **Supported** builtin libraries:
 ```py
 import sys
@@ -119,10 +119,10 @@ __next__
 ```
 
 ## Incompatibilities
-- [Unsupported builtin libraries](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#unsupported-builtin-libraries)
-- [Unsupported language features](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#unsupported-language-features)
-- [Unsupported global variables](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#unsupported-global-variables)
-- [Known unsupported dunders](https://github.com/SmartBoty/Minescript/new/main/pyjinn/compat.md#known-unsupported-dunders)
+- [Unsupported builtin libraries](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#unsupported-builtin-libraries)
+- [Unsupported language features](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#unsupported-language-features)
+- [Unsupported global variables](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#unsupported-global-variables)
+- [Known unsupported dunders](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/compat.md#known-unsupported-dunders)
 ### **Unsupported** builtin libraries
 - No python module is supported, other than a few, wich is only partially supported (community made libraries can be used instead)
 ### **Unsupported** language features:
