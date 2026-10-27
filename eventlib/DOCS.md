@@ -9,6 +9,7 @@
 - [Food change](https://github.com/SmaertBoty/Minescript/blob/main/eventlib/DOCS.md#food-change)
 - [Actionbar change](https://github.com/SmaertBoty/Minescript/blob/main/eventlib/DOCS.md#actionbar-change)
 - [Command interceptor](https://github.com/SmaertBoty/Minescript/blob/main/eventlib/DOCS.md#command-interceptor)
+- [Title change]()
 ### Data Types
 - EntityData -> https://minescript.net/docs#entitydata
 
@@ -75,6 +76,17 @@ Triggers when the actionbar changes
 listener: register_actionbar_change_listener()
 type: EventType.ACTIONBAR_CHANGE
 message: str
+```
+
+### Title change
+Triggers when the big title changes
+```
+listener: register_title_change_listener()
+type: EventType.TITLE_CHANGE
+title: str
+title_json: dict
+subtitle: str
+subtitle_json: dict
 ```
 
 ### Command interceptor
