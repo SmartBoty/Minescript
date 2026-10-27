@@ -9,7 +9,7 @@
 - [Food change](https://github.com/SmaertBoty/Minescript/blob/main/eventlib/DOCS.md#food-change)
 - [Actionbar change](https://github.com/SmaertBoty/Minescript/blob/main/eventlib/DOCS.md#actionbar-change)
 - [Command interceptor](https://github.com/SmaertBoty/Minescript/blob/main/eventlib/DOCS.md#command-interceptor)
-- [Title change]()
+- [Title change](https://github.com/SmartBoty/Minescript/blob/main/eventlib/DOCS.md#title-change)
 ### Data Types
 - EntityData -> https://minescript.net/docs#entitydata
 
