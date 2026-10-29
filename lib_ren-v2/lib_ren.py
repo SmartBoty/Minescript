@@ -129,6 +129,7 @@ class Shapes:
     LINE3D = 4
     POINT3D = 5
     TEXT3D = 6
+    ITEM = 7
 
 class GuiGraphic:
     def __json__(self):
@@ -136,6 +137,8 @@ class GuiGraphic:
             return {"type":Shapes.RECTANGLE,"x1":self.x1,"y1":self.y1,"x2":self.x2,"y2":self.y2,"color":self.color}
         elif self.type == Shapes.TEXT:
             return {"type":Shapes.TEXT,"text":self.text,"x":self.x,"y":self.y,"color":self.color}
+        elif self.type == Shapes.ITEM:
+            return {"type":Shapes.ITEM,"x":self.x,"y":self.y,"item":self.item,"amount":self.amount}
         else:
             return {"type":self.type}
 
@@ -154,7 +157,7 @@ class GuiGraphics:
     def __exit__(self, exc_type, exc, tb):
         self.renderer.push_stack()
 
-    def fill(self, x1:int, y1:int, x2:int, y2:int, color:tuple[int]):
+    def fill(self, x1:int, y1:int, x2:int, y2:int, color:tuple[int,int,int,int]):
         this = GuiGraphic()
         this.type = Shapes.RECTANGLE
         this.x1 = round(x1)
@@ -164,13 +167,22 @@ class GuiGraphics:
         this.color = color
         self.renderer._handle_instruction(this)
 
-    def text(self, text:str, x:int, y:int, color:tuple[int]):
+    def text(self, text:str, x:int, y:int, color:tuple[int,int,int,int]):
         this = GuiGraphic()
         this.type = Shapes.TEXT
         this.text = text
         this.x = round(x)
         this.y = round(y)
         this.color = color
+        self.renderer._handle_instruction(this)
+
+    def item(self, item:str, x:int, y:int, amount:int=1):
+        this = GuiGraphic()
+        this.type = Shapes.ITEM
+        this.x = round(x)
+        this.y = round(y)
+        this.amount = amount
+        this.item = item
         self.renderer._handle_instruction(this)
 
 class AABB:
@@ -316,7 +328,7 @@ class Matricies:
         this.degrees = degrees
         self.renderer._handle_instruction(this)
 
-renderers:AppendOnlyList[Renderer] = AppendOnlyList() # type:ignore
+renderers:list[Renderer] = AppendOnlyList()
 
 class Renderer:
     def __init__(self, name = None, *, clear_on_push=True) -> Renderer:
@@ -386,7 +398,10 @@ AABB = JavaClass("net.minecraft.world.phys.AABB")
 Vec3 = JavaClass("net.minecraft.world.phys.Vec3")
 TextGizmoStyle = JavaClass("net.minecraft.gizmos.TextGizmo$Style")
 OptionalDouble = JavaClass("java.util.OptionalDouble")
-Double = JavaClass("java.lang.Double")
+Identifier = JavaClass("net.minecraft.resources.Identifier")
+BuiltInRegistries = JavaClass("net.minecraft.core.registries.BuiltInRegistries")
+ItemStack = JavaClass("net.minecraft.world.item.ItemStack")
+ItemLike = JavaClass("net.minecraft.world.level.ItemLike")
 
 class Shapes:
 """ + "\n".join(f"    {k} = {v}" for k,v in Shapes.__dict__.items() if not k.startswith("__")) + r"""
@@ -427,52 +442,59 @@ def manage_render(GuiGraphics, delta):
         matrix = False
         for id in render_instructions:
             for i, inst in enumerate(render_instructions[id]["instructions"]):
-                if not inst:
-                    notify_python({"type":2,"reason":f"Malformed instruction: instruction {i+1} ({i}) on '{render_instructions[id]["name"]}' ({id})","on":id})
-                    break
-                if inst["type"] == Shapes.RECTANGLE:
-                    GuiGraphics.fill(inst["x1"], inst["y1"], inst["x2"], inst["y2"], ARGB.color(*inst["color"]))
-                elif inst["type"] == Shapes.TEXT:
-                    GuiGraphics.text(mc.font, inst["text"], inst["x"], inst["y"], ARGB.color(*inst["color"]))
-                elif inst["type"] == Shapes.CUBOID:
-                    if inst["style"]["type"] == "stroke":
-                        style = GizmoStyle.stroke(ARGB.color(*inst["style"]["color"]), inst["style"]["width"])
-                    elif inst["style"]["type"] == "fill":
-                        style = GizmoStyle.fill(ARGB.color(*inst["style"]["color"]))
-                    elif inst["style"]["type"] == "strokeAndFill":
-                        style = GizmoStyle.strokeAndFill(ARGB.color(*inst["style"]["color"]), inst["style"]["width"], ARGB.color(*inst["style"]["fill"]))
-                    else: return notify_python({"type":1,"reason":f"No such gizmo style: {inst["style"]["type"]}"})
-                    gizmo = Gizmos.cuboid(AABB(*inst["aabb"]),style)
-                    if inst["alwaysontop"]:
-                        gizmo.setAlwaysOnTop()
-                elif inst["type"] == Shapes.LINE3D:
-                    gizmo = Gizmos.line(Vec3(*inst["start"]),Vec3(*inst["end"]),ARGB.color(*inst["color"]),inst["width"])
-                    if inst["alwaysontop"]:
-                        gizmo.setAlwaysOnTop()
-                elif inst["type"] == Shapes.POINT3D:
-                    gizmo = Gizmos.point(Vec3(*inst["pos"]),ARGB.color(*inst["color"]),inst["size"])
-                    if inst["alwaysontop"]:
-                        gizmo.setAlwaysOnTop()
-                elif inst["type"] == Shapes.TEXT3D:
-                    gizmo = Gizmos.billboardText(inst["text"], Vec3(*inst["pos"]), TextGizmoStyle(ARGB.color(*inst["style"]["color"]), inst["style"]["scale"].floatValue(), OptionalDouble.of(inst["style"]["offset_left"])))
-                    if inst["alwaysontop"]:
-                        gizmo.setAlwaysOnTop()
-                elif inst["type"].startswith("matrix_"):
-                    if not matrix:
-                        matrix = GuiGraphics.pose()
-                        matrix.pushMatrix()
-                    if inst["type"] == "matrix_translate": matrix.translate(inst["x"], inst["y"])
-                    elif inst["type"] == "matrix_scale": matrix.scale(inst["scale_x"], inst["scale_y"])
-                    elif inst["type"] == "matrix_rotate": matrix.rotate(inst["degrees"])
-                    elif inst["type"] == "matrix_new":
-                        matrix.popMatrix()
-                        matrix.pushMatrix()
-                    elif inst["type"] == "matrix_transform":
-                        matrix.translate(inst["x"], inst["y"])
-                        matrix.scale(inst["scale_x"], inst["scale_y"])
-                        matrix.rotate(inst["degrees"])
-                else:
-                    notify_python({"type":2,"reason":f"No such renderable: {inst["type"]}","on":id})
+                try:
+                    if not inst:
+                        notify_python({"type":2,"reason":f"Malformed instruction: instruction {i+1} ({i}) on '{render_instructions[id]["name"]}' ({id})","on":id})
+                        break
+                    if inst["type"] == Shapes.RECTANGLE:
+                        GuiGraphics.fill(inst["x1"], inst["y1"], inst["x2"], inst["y2"], ARGB.color(*inst["color"]))
+                    elif inst["type"] == Shapes.TEXT:
+                        GuiGraphics.text(mc.font, inst["text"], inst["x"], inst["y"], ARGB.color(*inst["color"]))
+                    elif inst["type"] == Shapes.CUBOID:
+                        if inst["style"]["type"] == "stroke":
+                            style = GizmoStyle.stroke(ARGB.color(*inst["style"]["color"]), inst["style"]["width"])
+                        elif inst["style"]["type"] == "fill":
+                            style = GizmoStyle.fill(ARGB.color(*inst["style"]["color"]))
+                        elif inst["style"]["type"] == "strokeAndFill":
+                            style = GizmoStyle.strokeAndFill(ARGB.color(*inst["style"]["color"]), inst["style"]["width"], ARGB.color(*inst["style"]["fill"]))
+                        else: return notify_python({"type":1,"reason":f"No such gizmo style: {inst["style"]["type"]}"})
+                        gizmo = Gizmos.cuboid(AABB(*inst["aabb"]),style)
+                        if inst["alwaysontop"]:
+                            gizmo.setAlwaysOnTop()
+                    elif inst["type"] == Shapes.LINE3D:
+                        gizmo = Gizmos.line(Vec3(*inst["start"]),Vec3(*inst["end"]),ARGB.color(*inst["color"]),inst["width"])
+                        if inst["alwaysontop"]:
+                            gizmo.setAlwaysOnTop()
+                    elif inst["type"] == Shapes.POINT3D:
+                        gizmo = Gizmos.point(Vec3(*inst["pos"]),ARGB.color(*inst["color"]),inst["size"])
+                        if inst["alwaysontop"]:
+                            gizmo.setAlwaysOnTop()
+                    elif inst["type"] == Shapes.TEXT3D:
+                        gizmo = Gizmos.billboardText(inst["text"], Vec3(*inst["pos"]), TextGizmoStyle(ARGB.color(*inst["style"]["color"]), inst["style"]["scale"].floatValue(), OptionalDouble.of(inst["style"]["offset_left"])))
+                        if inst["alwaysontop"]:
+                            gizmo.setAlwaysOnTop()
+                    elif inst["type"] == Shapes.ITEM:
+                        item = ItemStack(BuiltInRegistries.ITEM.get(Identifier.parse(inst["item"])).get(), inst["amount"])
+                        GuiGraphics.item(item, inst["x"], inst["y"])
+                    elif inst["type"].startswith("matrix_"):
+                        if not matrix:
+                            matrix = GuiGraphics.pose()
+                            matrix.pushMatrix()
+                        if inst["type"] == "matrix_translate": matrix.translate(inst["x"], inst["y"])
+                        elif inst["type"] == "matrix_scale": matrix.scale(inst["scale_x"], inst["scale_y"])
+                        elif inst["type"] == "matrix_rotate": matrix.rotate(inst["degrees"])
+                        elif inst["type"] == "matrix_new":
+                            matrix.popMatrix()
+                            matrix.pushMatrix()
+                        elif inst["type"] == "matrix_transform":
+                            matrix.translate(inst["x"], inst["y"])
+                            matrix.scale(inst["scale_x"], inst["scale_y"])
+                            matrix.rotate(inst["degrees"])
+                    else:
+                        notify_python({"type":2,"reason":f"No such renderable: {inst["type"]}","on":id})
+                        break
+                except Exception as e:
+                    notify_python({"type":1,"reason":e.getMessage()})
                     break
             if matrix:
                 matrix.popMatrix()
