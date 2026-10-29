@@ -401,7 +401,6 @@ OptionalDouble = JavaClass("java.util.OptionalDouble")
 Identifier = JavaClass("net.minecraft.resources.Identifier")
 BuiltInRegistries = JavaClass("net.minecraft.core.registries.BuiltInRegistries")
 ItemStack = JavaClass("net.minecraft.world.item.ItemStack")
-ItemLike = JavaClass("net.minecraft.world.level.ItemLike")
 
 class Shapes:
 """ + "\n".join(f"    {k} = {v}" for k,v in Shapes.__dict__.items() if not k.startswith("__")) + r"""
