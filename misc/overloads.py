@@ -1,132 +1,109 @@
+from weakref import WeakKeyDictionary
+from typing import TYPE_CHECKING, get_type_hints
 import inspect
-from typing import TYPE_CHECKING
+import sys
 
-overloaded = {}
+class OverloadException(Exception): pass
+class ParamMissmatch(OverloadException): pass
+_overloaded = WeakKeyDictionary()
+_sig_matchers = {
+    0: isinstance,
+    1: lambda a,b: (type(a) == b) or b == object,
+    2: lambda a,b: type(a) == b
+}
 
-class SignatureDulicateElementException(Exception): pass
+def _convert_argtypes(args, kwargs):
+    out = [type(arg).__name__ for arg in args]
+    out += [f"{k}={type(v).__name__}" for k,v in kwargs.items()]
+    return ", ".join(out)
+def _matches_signature(func, args, kwargs, strictness):
+    type_hints = get_type_hints(func)
+    sig = inspect.signature(func)
+    try:
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+    except TypeError: return False
+    for name, value in bound.arguments.items():
+        param = sig.parameters[name]
+        annotation = type_hints.get(name, object)
+        matcher = _sig_matchers[strictness]
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            if not all(matcher(arg, annotation) for arg in value): return False
+        elif param.kind is inspect.Parameter.VAR_KEYWORD:
+            if not all(matcher(arg, annotation) for arg in value.values()): return False
+        else:
+            if not matcher(value, annotation): return False
+    return True
 
-def _resolve_signature(args:tuple,kwargs:dict):
-    resolved_args = []
-    resolved_kwargs = {}
-    for arg in args:
-        resolved_args.append({"type":type(arg),"value":arg})
-    for key, value in kwargs.items():
-        resolved_kwargs[key] = {"type":type(value),"value":value}
-    return {"args":resolved_args,"kwargs":resolved_kwargs}
-
-def _mathches_signature(call_signature, func_signature):
-    func_signature_types = [func_signature[key]["type"] for key in func_signature]
-    func_signature_keys = list(func_signature.keys())
-    found_posargs = []
-    completed = []
-    i = -1
-    for sig in call_signature["args"]:
-        i += 1
-        if i == len(func_signature_types): break
-        if isinstance(sig["type"], func_signature_types[i]) or sig["type"] == func_signature_types[i]:
-            if func_signature[func_signature_keys[i]]["kind"] == inspect.Parameter.VAR_POSITIONAL:
-                found_posargs.append(sig["value"])
-                completed.append(func_signature_keys[i])
-                i -= 1
-            elif func_signature[func_signature_keys[i]]["kind"] == inspect.Parameter.KEYWORD_ONLY:
-                call_signature["kwargs"].update(func_signature[func_signature_keys[i]])
-            else:
-                found_posargs.append(sig["value"])
-                completed.append(func_signature_keys[i])
-    missing = call_signature["args"][len(found_posargs):]
-    for key in func_signature_keys[len(found_posargs):]:
-        if func_signature[key]["kind"] == inspect.Parameter.POSITIONAL_ONLY:
-            return False
-    if not missing:
-        i = len(found_posargs)
-        for key, value in call_signature["kwargs"].items():
-            i += 1
-            if key in completed:
-                raise SignatureDulicateElementException(key)
-            elif key not in func_signature:
-                return False
-            else:
-                if isinstance(value["type"], func_signature[key]["type"]) or value["type"] == func_signature[key]["type"]:
-                    pass
-                else:
-                    return False
-        return True
-    return False
-
-def _pretty_signature_types(call_signature):
-    pretty = []
-    for item in call_signature["args"]:
-        pretty.append(item["type"].__name__)
-    for item in call_signature["kwargs"]:
-        pretty.append(f"{item}={call_signature["kwargs"][item]["type"].__name__}")
-    return ", ".join(pretty)
+temp = []
 
 class overload:
-    def __init__(self, func):
-        self.func = func
-        sig = {}
-        override_annotation = False
-        for name, param in inspect.signature(func).parameters.items():
-            annotation = param.annotation
-            if annotation is inspect._empty:
-                annotation = object
-            sig[name] = {"type": annotation, "kind":param.kind}
-        self.sig = sig
-        self.init = False
-        self.method_type = "function"
-        self.qname = func.__qualname__
-        self.class_id = str(__file__) + self.qname.split(".")[0]
-        self.id = self.class_id + self.qname
-        self.name = func.__name__
-        if __file__ not in overloaded:
-            overloaded[__file__] = {}
-        if self.id not in overloaded[__file__]:
-            overloaded[__file__][self.id] = []
-        if self.name not in overloaded[__file__]:
-            overloaded[__file__][self.name] = []
-        overloaded[__file__][self.id].append(self)
-        overloaded[__file__][self.name].append(self)
-    def __str__(self):
-        return f"{self.func}"
+    def __new__(cls, func=None, /, **kwargs):
+        obj = super().__new__(cls)
+        if func is None:
+            return lambda func: (obj.__init__(func,**kwargs),obj)[-1]
+        return obj
 
-    def __set_name__(self, owner, name):
-        self.clss = owner
-        if self.clss not in overloaded:
-            overloaded[self.clss] = {self.name:[]}
-        for obj in overloaded[__file__][self.id]:
-            if obj.id == self.id:
-                obj.method_type = "method"
-                overloaded[self.clss][self.name].append(obj)
+    def __init__(self, func=None, *, strictness=0):
+        self.func = func
+        self.id = func.__module__ + func.__qualname__
+        self.strictness = strictness
+        self.module = sys.modules[func.__module__]
+        self.clss = self.module
+        self.name = func.__name__
+        self.instance = []
+        self.isstatic = isinstance(func,staticmethod)
+        if self.module not in _overloaded:
+            _overloaded[self.module] = {}
+        if self.id not in _overloaded[self.module]:
+            _overloaded[self.module][self.id] = []
+        _overloaded[self.module][self.id].append(self)
 
     def __get__(self, instance, owner):
-        if instance is None:
-            return self
-        self.method_type = "method"
-        self.instance = instance
+        for overload in _overloaded[self.clss][self.id]:
+            if instance is not None and not overload.isstatic:
+                overload.instance = [instance]
+            else: overload.instance = []
         return self
 
-    def __call__(self,*args,**kwargs):
-        if self.method_type == "method":
-            args = (self.instance,) + args
-            clss = self.clss
-        else:
-            clss = __file__
-        for overload in overloaded[clss][self.name]:
-            if not overload.method_type == self.method_type: continue
-            try:
-                matches = _mathches_signature(_resolve_signature(args,kwargs),overload.sig)
-            except SignatureDulicateElementException as e:
-                raise TypeError(f"{self.name}() got multiple values for argument '{e}'")
-            if matches:
-                return overload.func(*args,**kwargs)
-        if self.method_type == "method":
-            raise AttributeError(f"'{self.clss.__name__}' object has no attribute '{self.func.__name__}' with a matching signature")
-        else: raise TypeError(f"'{self.name}' has no matching signature: {self.name}({_pretty_signature_types(_resolve_signature(args,kwargs))})")
+    def __set_name__(self, owner, name):
+        if owner not in _overloaded:
+            _overloaded[owner] = {}
+        if self.id not in _overloaded[owner]:
+            _overloaded[owner][self.id] = []
+        for overload in _overloaded[self.module].pop(self.id):
+            _overloaded[owner][self.id].append(overload)
+            overload.clss = owner
+        if len(_overloaded[self.module]) < 1: _overloaded.pop(self.module)
+
+    def __call__(self, *args, **kwargs):
+        args = list(args)
+        overloads = _overloaded[self.clss][self.id]
+        for overload in overloads:
+            a = (overload.instance + args) if not overload.isstatic else args
+            if _matches_signature(overload.func, a, kwargs, overload.strictness):
+                return overload.func(*a, **kwargs)
+        raise ParamMissmatch(f"{self.clss.__name__}.{self.name}({_convert_argtypes(a, kwargs)})")
 
 if TYPE_CHECKING:
     class overload:
         """
-        Overloads a method/function, allowing multiple signatures to resolve to different functions under the same name
+        Create an overload over a method / function, based on type annotations
 
-        Can be used on both methods and function
+        Overloads are resolved in decleration order
+
+        Strictness values:
+        - `0` (default): all args are matched with `isinstance`
+        - `1`: all args-s types are matched directly, with `object` being a wildcard
+        - `2`: all args-s types are matched directly, no wildcard. Not indented to be used with methods that have `self` or `cls` as one of their args
+
+        Compatible with `@staticmethod` decorator, but it must be under `@overload`:
+        ```
+        class SomeClass:
+            @overload
+            @staticmethod
+            def foo(): ...
+        ```
         """
+        def __init__(self, *, strictness=0, field=False):...
+
