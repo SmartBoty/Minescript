@@ -25,7 +25,8 @@ with renderer as (GuiGraphics, Gizmos, Matrix): ...
 - Block untill the next frame: `renderer.await_frame()`
 - Push changes made: `renderer.push_stack()`
 - Clear current state: `renderer.clear()`
-Note: the `with` statement does the above automatically
+
+Note: the `with` statement does the all of the above automatically
 - Get the `GUI` scale (updates every frame): `renderer.gui_scale()`
 
 Other:
