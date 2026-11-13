@@ -1,373 +1,461 @@
-from __future__ import annotations
-import socket
-from typing import Any, TYPE_CHECKING
-from system.lib.java import eval_pyjinn_script as eps, JavaObject as java_JavaObject
-from uuid import uuid4
-from threading import get_ident, Thread, Lock
-import json
-from concurrent.futures import Future
-from system.lib.minescript import log, echo
-from weakref import WeakKeyDictionary
-from time import sleep
-from queue import Queue
-import builtins
+"""
+`javapy.py` made by <[@SmartBoty](https://github.com/SmartBoty)>
+
+Original source (and `README`): [javapy on github](https://github.com/SmartBoty/Minescript/tree/main/javapy)
+
+Bugreports and suggestions are welcome in the discord thread! [javapy on discord](https://discord.com/channels/930220988472389713/1543638360143437845)
+
+`javapy` is licensed under [MIT](https://github.com/SmartBoty/Minescript/blob/main/javapy/LICENSE)
+"""
+# == Config == #
+debug = False
+# ============ #
+
 import sys
+from weakref import WeakKeyDictionary
+from uuid import uuid4
+from threading import get_ident, Lock, Thread
+import json
+from system.lib.java import eval_pyjinn_script as eps, JavaObject as BuiltinJavaObject
+from system.lib.minescript import echo
+from concurrent.futures import Future
+import socket
+from typing import TYPE_CHECKING
+from queue import Queue
+import inspect
+import ast
+from time import sleep
+import builtins
 
-concurrent = {}
+_bridge = socket.socket()
+_bridge.bind(("127.0.0.1", 0))
+_bridge.listen(1)
+_port = _bridge.getsockname()[1]
 js = WeakKeyDictionary()
-garbage_lock = Lock()
-garbage = Queue()
-java_types = {}
-java_classes = {}
-thread_amr_vars = {}
-amrl = Lock()
-global_amr_override = None
+"""
+Dictionary containing all java refference objects
+"""
+_concurrent = {}
+_writer_lock = Lock()
+_gc_queue = Queue()
+_class_cache = {}
 
-supress_java_error_messages = False
-debug_level = 0
-def debug_log(*msg,level=0):
-    if (level <= debug_level or debug_level >= 9) and debug_level:
-        op = log if (not debug_level >= 9) or level == debug_level else echo
-        op(" ".join(msg))
-
-def next_ufcid(): return f"{get_ident()}@{uuid4()}"
-
-call_lock = Lock()
-def run_call(data:dict):
-    future = Future()
-    concurrent[data["ufcid"]] = future
-    with call_lock:
-        writer.write(json.dumps(data)+"\n")
-        writer.flush()
-    result = future.result()
-    if result["fail"]:
-        if supress_java_error_messages: raise JavaException()
-        else: raise JavaException(result["reason"])
-    return result
-
-def convert(obj:JavaObject|java_JavaObject) -> java_JavaObject|JavaObject:
+def _debug(*msg):
+    if debug: echo("§d[§aJavapy§d] §b",*msg)
+def new_ufcid():
     """
-    Converts a javapy.py object into a java.py object (builtin)
+    Creates a thread- safe/unique identifier
 
-    OR
-
-    Converts a java.py object (builtin) into a javapy.py object
+    `UFCID`™ is short for `(universally) unique function call identifier`™
     """
-    if isinstance(obj,JavaObject):
-        uuid = submit_object(obj)
-        return _convert_from(uuid)
-    elif isinstance(obj,java_JavaObject):
-        id,runtime_type,*name = _convert_to(obj).split(";")
-        return JavaObject(id,";".join(name))
-    else: raise ValueError(f"Cannot determine wether type '{type(obj).__class__}' is from java.py (builtin) or javapy.py!")
-
-def request_object(uuid) -> JavaObject:
+    return f"{get_ident()}@{uuid4()}"
+def _resolve_class(clss):
+    global _class_cache
     """
-    Request a previously submitted object from a uuid.
+    Not part of the public API
 
-    Global, any process can request the object if they have the uuid
+    Internal implementation of `JavaClass()`
     """
-    debug_log(f"Requesting object: {uuid}")
-    ufcid = next_ufcid()
-    result = run_call({"ufcid":ufcid,"type":4,"uuid":uuid})
-    if not result["java_type"]: return result["value"]
-    else: return JavaObject(result["id"],result["name"],result["runtime_type"])
-
-def submit_object(obj):
+    _debug("Resolving class",clss)
+    if clss not in _class_cache:
+        jobj = JavaObject(type="JavaClass", **run_call({"type":_OpCodes.JavaClass,"class":clss}))
+        _class_cache[clss] = jobj
+        js[jobj]["clss"] = clss
+    return _class_cache[clss]
+def _resolve_field(self, field):
     """
-    Submit a javapy object, returns the uuid wich it was stored under
+    Not part of the public API
+
+    Internal implementation of `obj.foo`
     """
-    debug_log(f"Submitting object: {repr(obj)}")
-    ufcid = next_ufcid()
-    result = run_call({"ufcid":ufcid,"type":5,"obj_id":js[obj]["id"]})
-    return result["uuid"]
+    _debug("Resolving field",field)
+    result = run_call({"type":_OpCodes.Field,"field":field,"of":ref(self)})
+    if result["java_type"]:
+        return JavaObject(**result["value"])
+    else: return result["value"]
+def _resolve_method(self, method, args):
+    """
+    Not part of the public API
 
-def resolve_class(clss:str):
-    debug_log(f"Resolving class: {clss}")
-    ufcid = next_ufcid()
-    result = run_call({"ufcid":ufcid,"type":0,"class":clss})
-    return result["id"], result["name"], result["runtime_type"]
+    Internal implementation of `obj.foo()`
+    """
+    _debug("Resolving method:",method,"of",self)
+    result = run_call({"type":_OpCodes.Method,"method":method,"of":ref(self),"args":wrap_items(args)})
+    if result["java_type"]:
+        return JavaObject(**result["value"])
+    else: return result["value"]
+def _resolve_ctor(self, args):
+    """
+    Not part of the public API
 
-def resolve_member(member:str,obj:JavaObject):
-    debug_log(f"Resolving member {member} of {repr(obj)}")
-    ufcid = next_ufcid()
-    result = run_call({"ufcid":ufcid,"type":1,"member":member,"obj_id":js[obj]["id"]})
-    if result["field"]:
-        if not result["java_field"]: return result["value"]
-        else: return JavaObject(result["id"],result["name"],result["runtime_type"])
-    else: return JavaMember(obj,member)
+    Internal implementation of `obj()`
+    """
+    _debug("Resolving ctor / pyjinn func call:",self)
+    result = run_call({"type":_OpCodes.Ctor,"of":ref(self),"args":wrap_items(args)})
+    if result["java_type"]:
+        return JavaObject(**result["value"])
+    else: return result["value"]
+def _resolve_jc_to_ctor(clss, args):
+    """
+    Not part of the public API
 
-def resolve_member_as_method(member:str, obj:JavaObject):
-    ufcid = next_ufcid()
-    run_call({"ufcid":ufcid,"type":13,"obj":js[obj]["id"],"method":member})
-    return JavaMethod(member,obj)
+    Internal implementation of `_JavaClassToContructorInvoker()`
+    """
+    _debug("Resolving JavaClass resolving to constructor:",clss)
+    result = run_call({"type":_OpCodes.ConstructJavaClass,"class":clss,"args":wrap_items(args)})
+    if result["java_type"]: return JavaObject(**result["value"])
+    else: return result["value"]
+def run_call(call, fire_and_forget=False):
+    """
+    Not part of the public API
 
-def resolve_member_as_field(member:str, obj:JavaObject):
-    ufcid = next_ufcid()
-    result = run_call({"ufcid":ufcid,"type":14,"obj":js[obj]["id"],"field":member})
-    if not result["java_field"]: return result["value"]
-    else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+    Carries out a callrequest to Pyjinn, and propagates result
 
-def resolve_type(obj:JavaObject):
-    debug_log(f"Resolving type of {repr(obj)}")
-    ufcid = next_ufcid()
-    result = run_call({"ufcid":ufcid,"type":9,"id":js[obj]["id"]})
-    typ = JavaType(result["id"],result["name"])
-    js[obj]["runtime_type"] = typ
-    return typ
+    Every function, method and class of `javapy.py` eventually reaches this function
 
-def normalize_items(items):
-    out_normal = []
-    out_java = []
-    for item in items:
-        if isinstance(item, JavaObject):
-            out_normal.append(None)
-            if item in js:
-                out_java.append(js[item]["id"])
-            elif item in java_types:
-                out_java.append(java_types[item]["id"])
-            else: raise ValueError("Object doesnt exist!")
+    raises `JavaException` when something went wrong
+    
+    returns `None` if `fire_and_forget` is `True`, and will not block untill the call completes (Exception propagation will behave incorrectly!)
+    """
+    _debug(f"Running call ({fire_and_forget}):",call)
+    if fire_and_forget:
+        call["ufcid"] = -1
+        with _writer_lock:
+            _writer.write(json.dumps(call,separators=(',', ':')) + "\n")
+            _writer.flush()
+    else:
+        ufcid = new_ufcid()
+        call["ufcid"] = ufcid
+        future = Future()
+        _concurrent[ufcid] = future
+        with _writer_lock:
+            _writer.write(json.dumps(call,separators=(',', ':')) + "\n")
+            _writer.flush()
+        result = future.result()
+        if result["fail"]: raise JavaException("\n"+result["reason"])
         else:
-            out_normal.append(item)
-            out_java.append(None)
-    return out_normal, out_java
+            for i in result["new_classes"]:
+                _class_cache[i[1]] = JavaObject(ref_id=i[0],str=i[1])
+            return result["result"]
+def wrap_item(item):
+    """
+    Not part of the public API
 
-class type:
-    def __new__(cls, obj) -> JavaObject:
-        """
-        Returns the runtime class of the JavaObject. For any other object, it uses the builtin protocol
-        """
-        if isinstance(obj, JavaObject):
-            return js[obj]["runtime_type"] if "runtime_type" in js[obj] else resolve_type(obj)
-        else: return builtins.type(obj)
+    Internal wrapper to wrap singular args
+    """
+    if item in js: return {"java_type":True,"value":ref(item)}
+    else: return {"java_type":False,"value":item}
+def wrap_items(items):
+    """
+    Not part of the public API
 
-class JavaException(Exception): pass
+    Converts `list[Any]` into `tuple[list[Any|None], list[int|None]]`, where the second list is a list of `ref_id`-s
+    """
+    args = []
+    java_args = []
+    for i in items:
+        if i in js:
+            java_args.append(ref(i))
+            args.append(None)
+        else:
+            java_args.append(None)
+            args.append(i)
+    return args,java_args
+def unwrap_items(items):
+    """
+    Not part of the public API
+
+    Converts `list[list[Any|None], list[int|None]]` (where the second list is a list of `ref_id`-s) into `list[Any|JavaObject]`
+    """
+    args, java_args = items
+    out = []
+    for i in range(len(args)):
+        if java_args[i] is None:
+            out.append(args[i])
+        else: out.append(js[java_args[i]])
+    return out
+def ref(item):
+    """
+    Returns the `ref_id` of any object that has a java side refference
+
+    raises `TypeError` if there is no java side object
+    """
+    self = js.get(item)
+    if self is not None: return self["ref"]
+    else: raise TypeError(f"{item!r} ({builtins.type(item).__name__}) does not have a java side refference!")
+def set_limit(limit):
+    """
+    Changes the max instructions javapy is allowed to read per frame
+
+    Higher numbers may cause FPS lag and / or faster execution when multithreaded
+
+    Default is 50
+    """
+    _debug("Changing read limit to",limit)
+    run_call({"type":_OpCodes.SetLimit,"limit":limit},fire_and_forget=True)
+def _get_many(names, of):
+    """
+    Not part of the public API
+
+    Condenses many `script.get()` calls into one
+    """
+    return run_call({"type":_OpCodes.GETMANY,"names":names,"of":ref(of)})
+def _get_names_from(ast_body):
+    """
+    Helper for AST
+
+    Grabs all variable, function and class names from an ast tree body
+    """
+    names = []
+    for node in ast_body:
+        if builtins.isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.append(node.name)
+        elif builtins.isinstance(node, ast.ClassDef): #TODO
+            names.append(node.name)
+        elif builtins.isinstance(node, ast.Assign):
+            names += [n.id for n in node.targets]
+        #elif builtins.isinstance(node, ast.With):
+        #    return _get_names_from(node.body)
+    return names
+def add_event_listener(event,callback, keepalive=False):
+    """
+    Equivalent to its Pyjinn counterpart for the majority
+
+    if `keepalive` is `True`, the script will never exit on its own (does not block)
+    """
+    run_call({"type":_OpCodes.AEL,"on":ref(callback),"event":event},fire_and_forget=True)
+    if keepalive:
+        def worker():
+            while True: sleep(1000)
+        Thread(target=worker).start()
+def request(uuid):
+    result = run_call({"type":_OpCodes.Request,"uuid":uuid})
+    if result["java_type"]:
+        return JavaObject(**result["value"])
+    else: return result["value"]
+def submit(obj):
+    uuid = new_ufcid()
+    run_call({"type":_OpCodes.Submit,"uuid":uuid,"obj":wrap_item(obj)})
+    return uuid
+def convert(obj):
+    if obj in js:
+        return _grab_from_pyjinn(submit(obj))
+    else: return JavaObject(**run_call({"type":_OpCodes.Conv,"uuid":_put_to_pyjinn(obj)}))
+def isinstance(obj, classes):
+    """
+    Custom `isisntance()` implementation to work with `JavaObject`-s
+
+    Uses the builtin if types are not `JavaObject`
+    """
+    if type(classes) == tuple:
+        return any(isinstance(obj, clss) for clss in classes)
+    else:
+        if classes in js:
+            objt = type(obj)
+            clss = type(classes)
+            return type(obj) == type(classes)
+        else: return builtins.isinstance(obj,classes)
+
+class JavaException(Exception):
+    """
+    Base class for all of `javapy.py`-s exceptions
+    """
+    pass
+
+class _OpCodes:
+    """
+    Not part of the public API
+
+    Holds some OP codes used by the Python <---> Pyjinn IPC
+    """
+    JavaClass = 0
+    Field = 1
+    Method = 2
+    Ctor = 3
+    Batch = 4
+    Debatch = 5
+    ConstructJavaClass = 6
+    GC = 7
+    SetLimit = 8
+    GetItem = 9
+    SetItem = 10
+    SetAttr = 11
+    Iter = 12
+    EPS = 13
+    GET = 14
+    GETMANY = 15
+    AEL = 16
+    Submit = 17
+    Request = 18
+    Conv = 19
+
+class _MethodInvoker:
+    """
+    Not part of the public API
+
+    Resolves and calls a method of a `JavaObject` in one call to java
+    """
+    def __init__(self, parent, name):
+        self.parent = parent
+        self.name = name
+
+    def __call__(self, *args):
+        return _resolve_method(self.parent, self.name, args)
+
+class _JavaClassToContructorInvoker:
+    """
+    Not part of the public API
+
+    Resolves and constructs a JavaClass in one call to java
+    """
+    def __init__(self, clss):
+            self.clss = clss
+    
+    def __call__(self, *args):
+        return _resolve_jc_to_ctor(self.clss, args)
 
 class JavaObject:
-    def __init__(self, id, name, runtime_type):
-        js[self] = {}
-        js[self]["id"] = id
-        js[self]["name"] = name
-        js[self]["type"] = "JavaObject"
-        js[self]["runtime_type"] = JavaType(runtime_type["id"], runtime_type["name"])
+    def __init__(self, ref_id, type="JavaObject", **kwargs):
+        js[self] = {"type":type, "ref":ref_id, **kwargs}
 
-    def __str__(self):
-        return js[self]["name"]
+    def __getattribute__(self, name):
+        if js[self]["type"] == "script":
+            if name == "get":
+                return lambda n: PyjinnScript.get(self,n)
+        frame = sys._getframe(1)
+        if frame.f_code.co_code[frame.f_lasti + 1] & 1: return _MethodInvoker(self, name)
+        else: return _resolve_field(self, name)
 
-    def __repr__(self):
-        return f"<{js[self]["type"]} {js[self]["id"]} {js[self]["name"]}>"
-
-    def __call__(self,*args) -> JavaObject:
-        ufcid = next_ufcid()
-        normal_args, java_args = normalize_items(args)
-        if js[self]["type"] == "FixedReturnFunction":
-            debug_log(f"Resolving FixedReturnFunction call of {js[self]["name"]}")
-            #result = run_call({"ufcid":ufcid,"type":11,"id":js[self]["id"]})
-            #if not result["java_type"]: return result["value"]
-            #else: return JavaObject(result["id"],result["name"],result["runtime_type"])
-            return js[self]["obj"]
-        else:
-            debug_log(f"Resolving constructor call of {js[self]["name"]}{args}")
-            result = run_call({"ufcid":ufcid,"type":3,"obj_id":js[self]["id"],"args":normal_args,"java_args":java_args})
-            if not result["java_type"]: return result["value"]
-            else: return JavaObject(result["id"],result["name"],result["runtime_type"])
-
-    def __getattr__(self, name:str) -> JavaObject:
-        with amrl:
-            if global_amr_override is None:
-                use_alt = thread_amr_vars[get_ident()]
-            else: use_alt = global_amr_override
-        if use_alt:
-            debug_log(f"Resolving alternative member access: {js[self]["name"]}.{name}")
-            frame = sys._getframe(1)
-            if frame.f_code.co_code[frame.f_lasti + 1] & 1:
-                debug_log(f"Resolved member '{name}' as a <METHOD> access")
-                #return resolve_member_as_method(name, self)
-                return JavaMethod(name, self)
-            else:
-                debug_log(f"Resolved member '{name}' as a <FIELD> access")
-                return resolve_member_as_field(name, self)
-        else: return resolve_member(name, self)
+    def __call__(self, *args):
+        return _resolve_ctor(self, args)
 
     def __del__(self):
-        #echo(f"Garbage collecting: {js[self]["id"]}")
-        try: garbage.put(js[self]["id"])
-        except Exception as e: debug_log ; (f"Failed to garbage collect: {e}")
-
-    def __contains__(self, item):
-        debug_log(f"Resolving __contains__ for {repr(self)}")
-        ufcid = next_ufcid()
-        if isinstance(item, JavaObject):
-            java_type = True
-            obj = js[item]["id"]
-        else:
-            java_type = False
-            obj = item
-        result = run_call({"ufcid":ufcid,"type":12,"java_type":java_type,"iterable_id":js[self]["id"],"obj":obj})
-        return result["result"]
-
-    def __iter__(self):
-        i = -1
-        ufcid = next_ufcid()
-        while True:
-            i += 1
-            result = run_call({"ufcid":ufcid,"type":7,"id":js[self]["id"],"index":i,"is_iter":True})
-            if result["stop"]: return
-            if not result["java_type"]: yield result["value"]
-            else: yield JavaObject(result["id"],result["name"],result["runtime_type"])
+        try: _gc_queue.put_nowait(ref(self))
+        except: pass
 
     def __getitem__(self, key):
-        ufcid = next_ufcid()
-        result = run_call({"ufcid":ufcid,"type":7,"id":js[self]["id"],"index":key,"is_iter":False})
-        if not result["java_type"]: return result["value"]
-        else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+        result = run_call({"type":_OpCodes.GetItem,"key":wrap_item(key),"of":ref(self)})
+        if result["java_type"]:
+            return JavaObject(**result["value"])
+        else: return result["value"]
 
-    def __instancecheck__(self, other):
-        self_id = java_types[js[self]["runtime_type"]]["id"]
-        if isinstance(other, tuple):
-            for obj in other:
-                return any(self_id == java_types[js[obj]["runtime_type"]]["id"])
-        else: return self_id == java_types[js[other]["runtime_type"]]["id"]
+    def __setitem__(self, key, value):
+        run_call({"type":_OpCodes.SetItem,"key":wrap_item(key),"of":ref(self),"to":wrap_item(value)})
+        return value
 
-    def __len__(self):
-        ufcid = next_ufcid()
-        return run_call({"ufcid":ufcid,"type":8,"id":js[self]["id"]})["length"]
+    def __setattr__(self, name, value):
+        run_call({"type":_OpCodes.SetAttr,"attr":name,"of":ref(self),"to":wrap_item(value)})
+        return value
 
-class JavaMethod(JavaObject):
-    def __init__(self, member, obj):
-        self.member = member
-        self.obj = obj
+    def __iter__(self):
+        js[self]["iterator"] = -1
+        return self
 
-    def __call__(self,*args):
-        normal_args, java_args = normalize_items(args)
-        ufcid = next_ufcid()
-        result = run_call({"ufcid":ufcid,"type":2,"method":self.member, "obj_id":js[self.obj]["id"],"args":normal_args,"java_args":java_args})
-        del self
-        if not result["java_type"]: return result["value"]
-        else: return JavaObject(result["id"],result["name"],result["runtime_type"])
+    def __next__(self):
+        js[self]["iterator"] += 1
+        result = run_call({"type":_OpCodes.Iter,"of":ref(self),"idx":js[self]["iterator"]})
+        if result["stop"]: raise StopIteration
+        if result["java_type"]:
+            return JavaObject(**result["value"])
+        else: return result["value"]
 
-    def __del__(*_): pass
+    def __str__(self): return js[self]["str"]
+    def __repr__(self): return str(self)
 
-class JavaMember(JavaObject):
-    def __init__(self, parent:JavaObject, name:str):
-        js[self] = {}
-        js[self]["type"] = "JavaMember"
-        js[self]["parent"] = parent
-        js[self]["id"] = -1
-        js[self]["name"] = name
-
-    def __call__(self, *args) -> JavaObject:
-        debug_log(f"Resolving method call of {js[js[self]["parent"]]["name"]}.{js[self]["name"]}{args}")
-        ufcid = next_ufcid()
-        normal_args, java_args = normalize_items(args)
-        result = run_call({"ufcid":ufcid,"type":2,"method":js[self]["name"],"obj_id":js[js[self]["parent"]]["id"],"args":normal_args,"java_args":java_args})
-        if not result["java_type"]: return result["value"]
-        else: return JavaObject(result["id"],result["name"],result["runtime_type"])
-
-    def __del__(self): pass
+    def __instancecheck__(self, obj):
+        return obj in js
 
 class JavaClass(JavaObject):
-    def __init__(self, clss):
-        """
-        Resolves a java class
-        """
-        if self in js: return
-        id, name, runtime_type = resolve_class(clss)
-        js[self] = {}
-        js[self]["id"] = id
-        js[self]["name"] = name
-        js[self]["type"] = "JavaClass"
-        js[self]["runtime_type"] = JavaType(runtime_type["id"], runtime_type["name"])
-        java_classes[clss] = self
-
-    def __new__(cls, clss) -> JavaClass:
-        if clss in java_classes:
-            return java_classes[clss]
-        else:
-            return super().__new__(cls)
-
-class JavaType(JavaObject):
-    def __init__(self, id, name):
-        java_types[self] = {"id":id,"name":name,"type":"JavaType"}
-        js[self] = java_types[self]
-
-    def __str__(self):
-        return java_types[self]["name"]
-
-    def __repr__(self):
-        return f"<JavaType {java_types[self]["id"]} {java_types[self]["name"]}>"
-
-    def __del__(self): pass
-
-class FixedReturnFunction(JavaObject):
-    def __new__(cls, obj:JavaObject) -> JavaObject:
-        debug_log(f"Creating FixedReturnFunction from {repr(obj)}")
-        if isinstance(obj, JavaObject):
-            obj_id = js[obj]["id"]
-            java = True
-        else: java = False
-        ufcid = next_ufcid()
-        result = run_call({"ufcid":ufcid,"type":10,"returns":obj_id,"java":java})
-        java_obj = JavaObject(result["id"],result["name"],result["runtime_type"])
-        js[java_obj]["type"] = "FixedReturnFunction"
-        js[java_obj]["obj"] = obj
-        return java_obj
+    def __new__(cls, clss):
+        frame = sys._getframe(1)
+        if frame.f_code.co_code[frame.f_lasti + 8] == 34: return _JavaClassToContructorInvoker(clss)
+        else: return _resolve_class(clss)
 
 class PyjinnScript(JavaObject):
-    init = None
-    def __new__(cls):
-        debug_log("Resolving creation of __script__")
-        if PyjinnScript.init: return PyjinnScript.init
-        ufcid = next_ufcid()
-        result = run_call({"ufcid":ufcid,"type":11})
-        return JavaObject(result["id"],result["name"],result["runtime_type"])
+    def __new__(cls, src):
+        return JavaObject(type="script",**run_call({"type":_OpCodes.EPS,"src":src}))
 
-class _AlternativeMemberResolverHandler:
+    @staticmethod
+    def get(self, name):
+        _debug("Redirected attribute 'get' to PyjinnScript")
+        result = run_call({"type":_OpCodes.GET,"name":name,"of":ref(self)})
+        if result["java_type"]: return JavaObject(**result["value"])
+        else: return result["value"]
+
+def eval_pyjinn_script(src:str):
+    """
+    Evaluates sourcecode as Pyjinn sourcecode, and returns a handle to the underlying pyjinn script instance
+    """
+    return PyjinnScript(src)
+
+class _PyjinnContextLeave(Exception): pass
+
+class Pyjinn:
+    """
+    Pyjinn context manager to mimic `Jynnton`-s `Pyjinn` context manager
+
+    Instantiation is optional, but without it threadsafety may become a problem
+    """
     def __enter__(self):
-        thread_amr_vars[get_ident()] = True
+        _debug("Gathering src for Pyjinn context...")
+        frame = sys._getframe(1)
+        module = inspect.getmodule(frame)
+        src, start_line = inspect.getsourcelines(frame)
+        current_line = frame.f_lineno - start_line - 1
+        base_indent = None
+        source = []
+        lines = src[current_line:]
+        stripped = lines.pop(0).lstrip()
+        if not stripped.rstrip().endswith(":"):
+            source = [stripped[5:].strip()]
+        else:
+            for line in lines:
+                line = line[:-1]
+                stripped = line.lstrip()
+                indent = len(line) - len(stripped)
+                if base_indent is None: base_indent = indent
+                elif indent < base_indent and stripped: break
+                source.append(line[base_indent:])
+        src = "\n".join(source)
+        _debug("Gathered:\n",src)
+        names = _get_names_from(ast.parse(src).body)
+        obj = PyjinnScript(src)
+        for i, objdef in enumerate(_get_many(names, obj)):
+            if objdef["java_type"]:
+                val = JavaObject(**objdef["value"])
+            else: val = objdef["value"]
+            setattr(module,names[i],val)
+        def burn(f, event, arg):
+            if event == "line" and f == frame: raise _PyjinnContextLeave
+            return burn
+        sys.settrace(burn)
+        frame.f_trace = burn
+        return self
 
     def __exit__(self, exc_type, exc, tb):
-        thread_amr_vars[get_ident()] = False
+        sys.settrace(None)
+        if exc_type == _PyjinnContextLeave: return True
 
-    def enable(self):
-        global global_amr_override
-        global_amr_override = True
+    def __call__(self):
+        return builtins.type(self)()
+Pyjinn = Pyjinn()
 
-    def disable(self):
-        global global_amr_override
-        global_amr_override = False
+class type:
+    """
+    Custom `type()` implementation to work with `JavaObject`-s
 
-    def clear(self):
-        global global_amr_override
-        global_amr_override = None
+    Uses the builtin for any other object
+    """
+    def __new__(cls, obj):
+        if obj in js:
+            r = js[obj]["class"]
+            return [obj for obj in js if js[obj]["ref"] == r][0]
+        else: return builtins.type(obj)
 
-Alternative_Member_Resolver = _AlternativeMemberResolverHandler()
-Alternative_Member_Resolver.enable()
-
-bridge = socket.socket()
-bridge.bind(("127.0.0.1", 0))
-bridge.listen(1)
-port = bridge.getsockname()[1]
-script_loaded = False
-
-def __convert_from(*args):
-    global _convert_from
-    while not script_loaded: pass
-    _convert_from = script.get("convert_from")
-    return _convert_from(*args)
-_convert_from = __convert_from
-
-def __convert_to(*args):
-    global _convert_to
-    while not script_loaded: pass
-    _convert_to = script.get("convert_to")
-    return _convert_to(*args)
-_convert_to = __convert_to
-
-def __start__():
-    global script, script_loaded
-    try: script = eps(
+_s = eps(
 r"""
+import atexit
+from pyjinn_plus import inspect
 import pyjinn_json as json
 Socket = JavaClass("java.net.Socket")
 BufferedWriter = JavaClass("java.io.BufferedWriter")
@@ -375,438 +463,389 @@ OutputStreamWriter = JavaClass("java.io.OutputStreamWriter")
 StandardCharsets = JavaClass("java.nio.charset.StandardCharsets")
 BufferedReader = JavaClass("java.io.BufferedReader")
 InputStreamReader = JavaClass("java.io.InputStreamReader")
-Minescript = JavaClass("net.minescript.common.Minescript")
-mappings = Minescript.mappingsLoader.get()
+JavaClassType = JavaClass("org.pyjinn.interpreter.JavaClass")
 Class = JavaClass("java.lang.Class")
+TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
 Array = JavaClass("java.lang.reflect.Array")
 Object = JavaClass("java.lang.Object")
-JavaClassType = JavaClass("org.pyjinn.interpreter.JavaClass")
-UUID = JavaClass("java.util.UUID")
-TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
-mappings = JavaClass("net.minescript.common.Minescript").mappingsLoader.get()
 Set = JavaClass("java.util.Set")
-ArrayIndexOutOfBoundsException = JavaClass("java.lang.ArrayIndexOutOfBoundsException")
-#Modifier = JavaClass("java.lang.reflect.Modifier")
+Assignment = JavaClass("org.pyjinn.interpreter.Script$Assignment")
+Script = JavaClass("org.pyjinn.interpreter.Script")
+IllegalArgumentException = JavaClass("java.lang.IllegalArgumentException")
+UnsupportedOperationException = JavaClass("java.lang.UnsupportedOperationException")
+IndexOutOfBoundsException = JavaClass("java.lang.IndexOutOfBoundsException")
+Minescript = JavaClass("net.minescript.common.Minescript")
 
-def unpack_args(normal_args, java_args):
-    args = []
-    for i in range(len(normal_args)):
-        if normal_args[i] is None and java_args[i] is not None:
-            args.append(cached_java_objects[java_args[i]].obj)
-        else: args.append(normal_args[i])
-    return args
+bridge = Socket("127.0.0.1", """ + str(_port) + r""")
+bridge.setSoTimeout(1)
+writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
+reader = BufferedReader(InputStreamReader(bridge.getInputStream(), StandardCharsets.UTF_8))
+java_objects = {}
+java_id = 0
+read_limit = 50
+scripts = []
+call_method = [m for m in type(Script.Function).getDeclaredMethods() if m.getName() == "call"][0]
+call_method.setAccessible(True)
+if "javapy" not in __script__.vars["game"]:
+    __script__.vars["game"]["javapy"] = {}
+cache = {}
+cache_id = 0
+new_classes = []
+java_classes = {}
 
-def get_type_class_of(obj):
-    if isinstance(obj.obj, Class): clss = obj.obj
-    elif isinstance(obj.obj, JavaClassType): clss = type(obj.obj)
-    else: clss = obj.obj.getClass()
-    return clss
+def grab_from_pyjinn(uuid):
+    return __script__.vars["game"]["javapy"][uuid]
 
-def resolve_type(obj):
-    global cached_java_types
-    clss = get_type_class_of(obj)
-    if not clss in cached_java_types:
-        jo = JavaObject(clss)
-        cached_java_types[clss] = jo
-    return cached_java_types[clss]
+def put_to_pyjinn(obj):
+    global cache, cache_id
+    cache[cache_id] = obj
+    cache_id += 1
+    return cache_id - 1
 
-def convert_from(uuid):
-    obj = __script__.vars["game"]["javapy"][uuid]
-    del __script__.vars["game"]["javapy"][uuid]
+class PyjScriptObjectWrapper:
+    def __init__(self,obj,script):
+        self.obj = obj
+        self.script = script
+    
+    def __call__(self,*args):
+        return call_method.invoke(self.obj,as_array([self.script.mainModule().globals(),as_array(args)]))
+
+class OpCodes:
+    JavaClass = 0
+    Field = 1
+    Method = 2
+    Ctor = 3
+    Batch = 4
+    Debatch = 5
+    ConstructJavaClass = 6
+    GC = 7
+    SetLimit = 8
+    GetItem = 9
+    SetItem = 10
+    SetAttr = 11
+    Iter = 12
+    EPS = 13
+    GET = 14
+    GETMANY = 15
+    AEL = 16
+    Submit = 17
+    Request = 18
+    Conv = 19
+
+def get_java_obj(ref):
+    obj = java_objects[ref]
     return obj
+    
+def return_call(data):
+    writer.write(json.dumps(data) + "\n")
 
-def convert_to(obj):
-    obj = JavaObject(obj)
-    return f"{obj.id};{obj.obj}"
+def unwrap_item(item):
+    if item["java_type"]: return java_objects[item["value"]]
+    else: return item["value"]
+    
+def unwrap_items(items):
+    args, java_args = items
+    out = []
+    for i in range(len(args)):
+        if java_args[i] is None:
+            out.append(args[i])
+        else:
+            out.append(java_objects[java_args[i]])
+    return out
 
-def as_array(items,specific_type=Object):
+def as_class(obj):
+    if isinstance(obj, JavaClassType): return type(obj)
+    elif isinstance(obj, Class): return obj
+    else: return obj.getClass()
+
+def as_array(items, specific_type=Object):
     array = Array.newInstance(type(specific_type),len(items))
     for i,arg in enumerate(items):
         Array.set(array, i, arg)
     return array
 
-def as_class_array(items):
-    array = Array.newInstance(type(Class),len(items))
-    for i, arg in enumerate(items):
-        if isinstance(arg, JavaClassType): arg = type(arg)
-        elif not isinstance(arg, Class): arg = arg.getClass() if arg is not None else null
-        Array.set(array, i, arg)
-    return array
+def classes_of(items):
+    return TypeChecker.getTypes(as_array(items))
 
-can_jsonify_types = (type(0),type(""),type(True),type(None))
-def can_jsonify(obj):
-    if isinstance(obj, can_jsonify_types): return True
-    return False
+def add_obj(obj):
+    global java_id
+    java_objects[java_id] = obj
+    java_id += 1
+    return java_id - 1
 
-def return_call(data):
-    writer.write(json.dumps(data)+"\n")
-    writer.flush()
+def add_type(obj):
+    global java_classes, java_id
+    type = as_class(obj)
+    if type not in java_classes:
+        java_objects[java_id] = type
+        java_classes[type] = java_id
+        new_classes.append([java_id,type.toString()])
+        java_id += 1
+        return java_id - 1
+    return java_classes[type]
 
-def next_id():
-    global current_id
-    current_id += 1
-    return current_id
-
-def resolve_callable_method(self,clss,method,args):
-    classes = as_class_array(args)
-    m = TypeChecker.findBestMatchingMethod(clss, True, method_func, method, classes, None)
-    try:
-        m
-        force_skip = False
-    except: force_skip = True
-    if not m.isEmpty() or force_skip:
-        return (True, m.get())
-    else:
-        m = TypeChecker.findBestMatchingMethod(clss, False, method_func, method, classes, None)
-        try: m
-        except: raise Exception(f"Failed to find suitable method: {method}")
-        if not m.isEmpty():
-            return (False, m.get())
-    raise Exception(f"NoSuchMethod: {method}({str(classes)[1:-1]}) (jpy)")
+def construct(obj, args):
+    if isinstance(obj, PyjScriptObjectWrapper):
+        return obj(*args)
+    ctor = TypeChecker.findBestMatchingConstructor(as_class(obj), classes_of(args), None)
+    if not ctor.isEmpty():
+        return ctor.get().newInstance(__script__.mainModule().globals(), as_array(args))
+    raise Exception(f"NoSuchConstructor: {as_class(obj).getName()}({", ".join([as_class(arg).getName() for arg in args])})")
 
 method_func = lambda _, method: Set.of(method)
-def invoke(self,method,args):
-    if isinstance(self.obj, JavaClassType): clss = type(self.obj)
-    else: clss = self.obj.getClass()
-    array_args = as_array(args)
-    isstatic, method = resolve_callable_method(self,clss,method,args)
-    if isstatic:
-        return method.invoke(__script__.mainModule().globals(),clss,array_args)
-    else:
-        return method.invoke(__script__.mainModule().globals(),self.obj,array_args)
+def invoke(obj, method, args):
+    if isinstance(obj, (JavaClassType, Class)): static = True
+    else: static = False
+    clss = as_class(obj)
+    m = TypeChecker.findBestMatchingMethod(clss, static, method_func, method, classes_of(args), None)
+    if not m.isEmpty():
+        return m.get().invoke(__script__.mainModule().globals(), (clss if static else obj), as_array(args))
+    raise Exception(f"NoSuchMethod: {as_class(obj).getName()}.{method}({", ".join([as_class(arg).getName() for arg in args])})")
 
-def construct(self,args):
-    if isinstance(self.obj, JavaClassType): clss = type(self.obj)
-    else: clss = self.obj.getClass()
-    classes = as_class_array(args)
-    array_args = as_array(args)
-    classes = as_class_array(args)
-    array_args = as_array(args)
-    ctor = TypeChecker.findBestMatchingConstructor(clss, classes, None)
-    if not ctor.isEmpty():
-        return ctor.get().newInstance(__script__.mainModule().globals(),array_args)
-    raise Exception(f"NoSuchConstructor: {self.obj}({str(classes)[1:-1]})")
+primitive_types = (str,int,float,bool)
+def is_primitive(item):
+    return (item is None or isinstance(item, primitive_types))
 
-class JavaClassObject:
-    def __init__(self, clss):
-        self.obj = JavaClassType.of(Class.forName(mappings.getRuntimeClassName(clss)))
-        self.id = next_id()
-        cached_java_objects[self.id] = self
+def handle_instruction(payload):
+    global java_objects, read_limit
+    result = {}
+    if payload["type"] == OpCodes.Batch:
+        vars = {}
+        instructions = payload["instructions"]
+        for inst in instructions:
+            op = inst["op"]
+            if op == OpCodes.JavaClass:
+                vars[inst["store"]] = add_obj(JavaClassType.of(Class.forName(inst["class"])))
+            elif op == OpCodes.Field:
+                obj = java_objects[inst["of"]]
+                vars[inst["store"]] = add_obj(as_class(obj).getField(inst["field"]).get(obj))
+            elif op == OpCodes.Method:
+                obj = java_objects[inst["of"]]
+                vars[inst["store"]] = add_obj(invoke(obj,inst["method"], unwrap_items(inst["args"])))
+            elif op == OpCodes.Ctor:
+                vars[inst["store"]] = add_obj(construct(java_objects[inst["of"]], unwrap_items(inst["args"])))
+            elif op == OpCodes.ConstructJavaClass:
+                vars[inst["store"]] = add_obj(construct(JavaClassType.of(Class.forName(inst["class"])), unwrap_items(inst["args"])))
+            else: raise Exception("Unknown batched op: " + str(op))
+        result = vars
+    elif payload["type"] == OpCodes.Method:
+        obj = get_java_obj(payload["of"])
+        if isinstance(obj, PyjScriptObjectWrapper):
+            obj = obj.obj
+        res = invoke(obj,payload["method"],unwrap_items(payload["args"]))
+        if is_primitive(res):
+            result = {"java_type":False,"value":res}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)}}
+    elif payload["type"] == OpCodes.Field:
+        obj = get_java_obj(payload["of"])
+        res = as_class(obj).getField(payload["field"]).get(obj)
+        if is_primitive(res):
+            result = {"java_type":False,"value":res}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)}}
+    elif payload["type"] == OpCodes.Ctor:
+        obj = get_java_obj(payload["of"])
+        res = construct(obj,unwrap_items(payload["args"]))
+        if is_primitive(res):
+            result = {"java_type":False,"value":res}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)}}
+    elif payload["type"] == OpCodes.JavaClass:
+        obj = JavaClassType.of(Class.forName(payload["class"]))
+        result = {"ref_id":add_obj(obj),"str":str(obj),"class":add_type(obj)}
+    elif payload["type"] == OpCodes.Debatch:
+        result = []
+        for ref in payload["refs"]:
+            if ref is None: result.append(None)
+            else: result.append(java_objects[ref])
+    elif payload["type"] == OpCodes.ConstructJavaClass:
+        res = construct(JavaClassType.of(Class.forName(payload["class"])),unwrap_items(payload["args"]))
+        if is_primitive(res):
+            result = {"java_type":False,"value":res}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)}}
+    elif payload["type"] == OpCodes.GC:
+        del java_objects[payload["ref"]]
+    elif payload["type"] == OpCodes.SetLimit:
+        read_limit = payload["limit"]
+    elif payload["type"] == OpCodes.GetItem:
+        obj = get_java_obj(payload["of"])
+        key = unwrap_item(payload["key"])
+        res = obj[key]
+        if is_primitive(res):
+            result = {"java_type":False,"value":res}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)}}
+    elif payload["type"] == OpCodes.SetItem:
+        obj = get_java_obj(payload["of"])
+        key = unwrap_item(payload["key"])
+        to = unwrap_item(payload["to"])
+        Assignment.assignArray(obj, key, to)
+    elif payload["type"] == OpCodes.SetAttr:
+        obj = get_java_obj(payload["of"])
+        key = payload["attr"]
+        to = unwrap_item(payload["to"])
+        try:
+            if not Assignment.assignField(obj,key,to): raise IllegalArgumentException(f"Unsupported expression type for lhs of assignment: {obj}")
+        except UnsupportedOperationException:
+            try: as_class(obj).getField(key).set(obj, to)
+            except: raise IllegalArgumentException(f"Unsupported expression type for lhs of assignment: {obj}")
+    elif payload["type"] == OpCodes.Iter:
+        obj = get_java_obj(payload["of"])
+        key = payload["idx"]
+        try:
+            res = obj[key]
+            stop = False
+        except IndexOutOfBoundsException:
+            res = None
+            stop = True
+        if is_primitive(res):
+            result = {"java_type":False,"value":res,"stop":stop}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)},"stop":stop}
+    elif payload["type"] == OpCodes.EPS:
+        script = Minescript.loadPyjinnScript(JavaList(["__eval_pyjinn_script__"]), payload["src"])
+        script.redirectStdout(__script__.stdout)
+        script.redirectStderr(__script__.stderr)
+        scripts.append(script)
+        result = {"ref_id":add_obj(script),"str":str(script),"class":add_type(script)}
+        script.vars["job"] = __script__.vars["job"]
+        script.vars["game"] = __script__.vars["game"]
+        script.exec()
+    elif payload["type"] == OpCodes.GET:
+        script = get_java_obj(payload["of"])
+        obj = script.get(payload["name"])
+        if is_primitive(obj): result = {"java_type":False,"value":obj}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(PyjScriptObjectWrapper(obj,script)),"str":str(obj),"class":add_type(obj)}}
+    elif payload["type"] == OpCodes.GETMANY:
+        script = get_java_obj(payload["of"])
+        result = []
+        for name in payload["names"]:
+            obj = script.get(name)
+            if is_primitive(obj): res = {"java_type":False,"value":obj}
+            else: res = {"java_type":True,"value":{"ref_id":add_obj(PyjScriptObjectWrapper(obj,script)),"str":str(obj),"class":add_type(script)}}
+            result.append(res)
+    elif payload["type"] == OpCodes.AEL:
+        add_event_listener(payload["event"],get_java_obj(payload["on"]))
+    elif payload["type"] == OpCodes.Request:
+        res = __script__.vars["game"]["javapy"][payload["uuid"]]
+        if is_primitive(res):
+            result = {"java_type":False,"value":res}
+        else: result = {"java_type":True,"value":{"ref_id":add_obj(res),"str":str(res),"class":add_type(res)}}
+    elif payload["type"] == OpCodes.Submit:
+        __script__.vars["game"]["javapy"][payload["uuid"]] = unwrap_item(payload["obj"])
+    elif payload["type"] == OpCodes.Conv:
+        obj = cache[payload["uuid"]]
+        del cache[payload["uuid"]]
+        result = {"ref_id":add_obj(obj),"str":str(obj),"class":add_type(obj)}
+    else: raise Exception(f"No such instruction: {payload["type"]}")
+    return_call({"ufcid":payload["ufcid"],"result":result, "fail":False, "new_classes":new_classes})
+    new_classes.clear()
 
-class JavaObject:
-    def __init__(self, obj):
-        self.obj = obj
-        self.id = next_id()
-        cached_java_objects[self.id] = self
-        self.type = "JavaObject"
-
-bridge = Socket("127.0.0.1", """ + str(port) + r""")
-null = bridge.setSoTimeout(1)
-writer = BufferedWriter(OutputStreamWriter(bridge.getOutputStream(), StandardCharsets.UTF_8))
-reader = BufferedReader(InputStreamReader(bridge.getInputStream(), StandardCharsets.UTF_8))
-current_id = -1
-cached_java_objects = {}
-cached_java_types = {}
-if "javapy" not in __script__.vars["game"]: __script__.vars["game"]["javapy"] = {}
-scripts = []
-
-def _main(_):
-    global cached_java_objects, runtime_type_id
+def main(_):
     lines = []
     iters = 0
     if not reader.ready(): return
     while True:
         iters += 1
-        if iters > 50: log("Overloaded! Exiting reader...") ; break
+        if iters > read_limit: log("[Javapy] Overloaded! Exiting reader...") ; break
         try:
+            if not reader.ready(): break
             line = reader.readLine()
             if line: lines.append(line)
             else: break
         except Exception as e:
             if "SocketTimeout" not in str(e): log(f"Exception caught! {e}")
             break
-    for line in lines:
-        payload = json.loads(line)
-        if payload["type"] == 0: # resolve_class {"ufcid":ufcid,"type":0,"class":clss}
-            try:
-                jco = JavaClassObject(payload["class"])
-                runtime_type = resolve_type(jco)
-                return_call({"ufcid":payload["ufcid"],"id":jco.id,"name":str(jco.obj),"fail":False,"runtime_type":{"name":str(runtime_type.obj),"id":runtime_type.id}})
+    try:
+        for line in lines:
+            payload = json.loads(line)
+            handle_instruction(payload)
+            try: pass
             except Exception as e:
                 return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 1: # resolve member {"ufcid":ufcid,"type":1,"member":member,"obj_id":obj.id}
-            obj = cached_java_objects[payload["obj_id"]]
-            object = get_type_class_of(obj)
-            #if isinstance(obj.obj, Class): object = obj.obj
-            #elif isinstance(obj.obj, JavaClassType): object = type(obj.obj)
-            #else: object = obj.obj.getClass()
-            try:
-                field = object.getField(payload["member"]).get(obj.obj)
-                got_field = True
-            except:
-                field = None
-                got_field = False
-            got_method = False
-            for method in object.getMethods():
-                if method.getName() == payload["member"]:
-                    got_method = True
-                    break
-            if got_field:
-                if can_jsonify(field):
-                    java_field = False
-                    id = None
-                    value = field
-                    name = None
-                    runtime_type = None
-                else:
-                    java_field = True
-                    jo = JavaObject(field)
-                    id = jo.id
-                    value = None
-                    name = str(jo.obj)
-                    runtime_type = resolve_type(jo)
-                return_call({"ufcid":payload["ufcid"],"fail":False,"field":True,"java_field":java_field,"value":value,"id":id,"name":name,"runtime_type":{"name":str(runtime_type.obj),"id":runtime_type.id}})
-            elif got_method:
-                return_call({"ufcid":payload["ufcid"],"fail":False,"field":False,"java_field":None,"value":None,"id":None,"name":None})
-            else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"NoSuchMemberException: {obj.obj} has no member named {payload["member"]} (jpy)"})
-        elif payload["type"] == 2: # method call {"ufcid":ufcid,"type":2,"method":js[self]["name"],"obj_id":js[js[self]["parent"]]["id"],"args":normal_args,"java_args":java_args}
-            obj = cached_java_objects[payload["obj_id"]]
-            normal_args = payload["args"]
-            java_args = payload["java_args"]
-            args = []
-            for i in range(len(normal_args)):
-                if normal_args[i] is None and java_args[i] is not None:
-                    args.append(cached_java_objects[java_args[i]].obj)
-                else: args.append(normal_args[i])
-            try:
-                result = invoke(obj,payload["method"],args)
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-                continue
-            if can_jsonify(result):
-                java_type = False
-                value = result
-                id = None
-                name = None
-                runtime_type_name = None
-                runtime_type_id = None
-            else:
-                java_type = True
-                value = None
-                jo = JavaObject(result)
-                id = jo.id
-                name = str(jo.obj)
-                runtime_type = resolve_type(jo)
-                runtime_type_name = str(runtime_type.obj)
-                runtime_type_id = runtime_type.id
-            return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"runtime_type":{"name":runtime_type_name,"id":runtime_type_id}})
-        elif payload["type"] == 3: # constructor call {"ufcid":ufcid,"type":3,"obj_id":js[self]["id"],"args":normal_args,"java_args":java_args}
-            obj = cached_java_objects[payload["obj_id"]]
-            normal_args = payload["args"]
-            java_args = payload["java_args"]
-            args = []
-            for i in range(len(normal_args)-1):
-                if normal_args[i] is None:
-                    args.append(cached_java_objects[java_args[i]].obj)
-                else: args.append(normal_args[i])
-            try: result = construct(obj,args)
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-                continue
-            if can_jsonify(result):
-                java_type = False
-                value = result
-                id = None
-                name = None
-                runtime_type_name = None
-                runtime_type_id = None
-            else:
-                java_type = True
-                value = None
-                jo = JavaObject(result)
-                id = jo.id
-                name = str(jo.obj)
-                runtime_type = resolve_type(jo)
-                runtime_type_name = str(runtime_type.obj)
-                runtime_type_id = runtime_type.id
-            return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"runtime_type":{"name":runtime_type_name,"id":runtime_type_id}})
-        elif payload["type"] == 4: # request object {"ufcid":ufcid,"type":4,"uuid":uuid}
-            if payload["uuid"] in __script__.vars["game"]["javapy"]:
-                obj = __script__.vars["game"]["javapy"][payload["uuid"]]
-                del __script__.vars["game"]["javapy"][payload["uuid"]]
-                if can_jsonify(obj):
-                    java_type = False
-                    value = obj
-                    id = None
-                    name = None
-                else:
-                    java_type = True
-                    value = None
-                    jo = JavaObject(obj)
-                    id = jo.id
-                    name = jo.obj.getClass().getName()
-                return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name})
-            else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"KeyError: {payload["uuid"]}"})
-        elif payload["type"] == 5: # submit object {"ufcid":ufcid,"type":4,"obj_id":js[obj]["id"]}
-            uuid = UUID.randomUUID().toString()
-            __script__.vars["game"]["javapy"][uuid] = cached_java_objects[payload["obj_id"]]
-            return_call({"ufcid":payload["ufcid"],"fail":False,"uuid":uuid})
-        elif payload["type"] == 6: # Garbage collection
-            try:
-                del cached_java_objects[payload["id"]]
-                return_call({"ufcid":payload["ufcid"],"fail":False})
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 7: # subscripting
-            obj = cached_java_objects[payload["id"]].obj
-            try:
-                res = obj[payload["index"]]
-                if can_jsonify(res):
-                    java_type = False
-                    id = None
-                    name = None
-                    value = res
-                    runtime_type_name = None
-                    runtime_type_id = None
-                else:
-                    java_type = True
-                    jo = JavaObject(res)
-                    id = jo.id
-                    name = str(jo.obj)
-                    value = None
-                    runtime_type = resolve_type(jo)
-                    runtime_type_name = str(runtime_type.obj)
-                    runtime_type_id = runtime_type.id
-                return_call({"ufcid":payload["ufcid"],"fail":False,"java_type":java_type,"value":value,"id":id,"name":name,"stop":False,"runtime_type":{"name":runtime_type_name,"id":runtime_type_id}})
-            except Exception as e:
-                if isinstance(e, ArrayIndexOutOfBoundsException) and payload["is_iter"]:
-                    return_call({"ufcid":payload["ufcid"],"fail":False,"stop":True})
-                else: return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 8: # __len__
-            obj = cached_java_objects[payload["id"]].obj
-            try:
-                length = len(obj)
-                return_call({"ufcid":payload["ufcid"],"fail":False,"length":length})
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 9: # type res
-            obj = cached_java_objects[payload["id"]]
-            try:
-                runtime_type = resolve_type(obj)
-                return_call({"ufcid":payload["ufcid"],"fail":False,"name":str(runtime_type.obj),"id":runtime_type.id})
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 10: # FixedReturnFunction def
-            if payload["java"]:
-                returns = cached_java_objects[payload["returns"]].obj
-            else: returns = payload["returns"]
-            jo = JavaObject(lambda *_: returns)
-            jo.java_return = payload["java"]
-            runtime_type = resolve_type(jo)
-            return_call({"ufcid":payload["ufcid"],"id":jo.id,"name":str(jo.obj),"runtime_type":{"id":runtime_type.id,"name":str(runtime_type.obj)},"fail":False})
-        elif payload["type"] == 11: # grabs __script__ handle
-            script = Minescript.loadPyjinnScript(JavaList(["__eval__.pyj"]), "from minescript import *")
-            script.redirectStdout(__script__.stdout)
-            script.redirectStderr(__script__.stderr)
-            script.vars["game"] = __script__.vars["game"]
-            scripts.append(script)
-            script.exec()
-            jo = JavaObject(script)
-            runtime_type = resolve_type(jo)
-            return_call({"ufcid":payload["ufcid"],"fail":False,"id":jo.id,"name":str(jo.obj),"runtime_type":{"name":str(runtime_type.obj),"id":runtime_type.id}})
-        elif payload["type"] == 12: # __contains__ aka 'x in y'
-            iterable_obj = cached_java_objects[payload["iterable_id"]].obj
-            if payload["java_type"]: obj = cached_java_objects[payload["obj"]].obj
-            else: obj = payload["obj"]
-            try:
-                result = obj in iterable_obj
-                return_call({"ufcid":payload["ufcid"],"fail":False,"result":result})
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 13: # alt resolve method
-            obj = cached_java_objects[payload["obj"]].obj
-            if isinstance(obj, JavaClassType): clss = type(obj)
-            else: clss = obj.getClass()
-            try:
-                found = False
-                for method in clss.getMethods():
-                    if method.getName() == payload["method"]:
-                        return_call({"ufcid":payload["ufcid"],"fail":False})
-                        found = True
-                        break
-                if not found: raise Exception(f"NoSuchMethod: {obj} has no method named '{payload["method"]}'")
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        elif payload["type"] == 14: # alt resolve field
-            obj = cached_java_objects[payload["obj"]]
-            clss = get_type_class_of(obj)
-            try:
-                field = clss.getField(payload["field"]).get(obj.obj)
-                if can_jsonify(field):
-                    java_field = False
-                    id = None
-                    value = field
-                    name = None
-                    runtime_type = None
-                else:
-                    java_field = True
-                    jo = JavaObject(field)
-                    id = jo.id
-                    value = None
-                    name = str(jo.obj)
-                    runtime_type = resolve_type(jo)
-                return_call({"ufcid":payload["ufcid"],"fail":False,"java_field":java_field,"value":value,"id":id,"name":name,"runtime_type":{"name":str(runtime_type.obj),"id":runtime_type.id}})
-            except Exception as e:
-                return_call({"ufcid":payload["ufcid"],"fail":True,"reason":str(e)})
-        else:
-            return_call({"ufcid":payload["ufcid"],"fail":True,"reason":f"Javapy: Unexpected opcode: {payload["type"]}"})
+    finally: writer.flush()
 
-__script__.atExit(lambda status: [script.exit(status) for script in scripts])
-
-add_event_listener("render",_main)
+add_event_listener("render",main)
+atexit.register(lambda: [s.exit() for s in scripts])
 """)
-    except Exception as e: debug_log(f"Exception during script loading: {e}",level=8)
-    script_loaded = True
-Thread(target=__start__).start()
 
-conn, _ = bridge.accept()
-reader = conn.makefile("r", encoding="utf-8")
-writer = conn.makefile("w", encoding="utf-8")
+_conn, _ = _bridge.accept()
+_reader = _conn.makefile("r", encoding="utf-8")
+_writer = _conn.makefile("w", encoding="utf-8")
+_grab_from_pyjinn = _s.get("grab_from_pyjinn")
+_put_to_pyjinn = _s.get("put_to_pyjinn")
 
 def __reader__():
     while True:
-        line = reader.readline()
+        line = _reader.readline()
         data = json.loads(line)
-        if data["ufcid"] in concurrent: concurrent.pop(data["ufcid"]).set_result(data)
+        if data["ufcid"] == -1:
+            if data["fail"]:
+                print("Javapy system error:\n"+str(data["reason"]),file=sys.stderr)
+        elif data["ufcid"] in _concurrent:
+            _debug("Returning from call with:",data)
+            _concurrent.pop(data["ufcid"]).set_result(data)
+Thread(target=__reader__,daemon=True).start()
 
 def __garbage_collector__():
     while True:
-        id = garbage.get()
-        debug_log(f"Garbage collecting: {id}", level=8)
-        run_call({"ufcid":0,"type":6,"id":id})
-        debug_log(f"Garbage collected: {id}", level=8)
-
-Thread(target=__reader__,daemon=True).start()
+        run_call({"type":_OpCodes.GC,"ref":_gc_queue.get()},fire_and_forget=True)
 Thread(target=__garbage_collector__,daemon=True).start()
 
-__script__ = PyjinnScript()
-
+__script__ = PyjinnScript("None")
 if TYPE_CHECKING:
-    class FixedReturnFunction(JavaObject):
-        def __init__(self, obj) -> JavaObject:
-            """
-            Creates a pyjinn function that has a fixed return value. This object can be passed down as arguments to java calls
-        
-            Equal to `lambda *_: obj`
-            """
+    class JavaObject:
+        """
+        Not part of the public API
 
+        Generate a refference holder pointing to the java side object with the refference id `ref_id`
+        ```py
+        obj = JavaObject(0,**{"str":"<Some java object>","class":1}) # Assuming there is an object at refference # 0, and a type reference at # 1
+        print(obj) # '<Some java object>'
+        ```
+        Supports iteration
+
+        Every `javapy.py` function that returns some sort of java side object, will eventually reach this class
+        """
+        def __init__(self, ref_id, type="JavaObject", **kwargs) -> JavaObject: ...
+        def __getattr__(self, name) -> JavaObject: ...
+        def __call__(self, *args) -> JavaObject: ...
+    class JavaClass(JavaObject):
+        """
+        Resolve and evaluate a JavaClass
+
+        raises `JavaException` if resolution failed
+        """
+        def __init__(self, clss) -> JavaObject: ...
+    class PyjinnScript(JavaObject):
+        """
+        Not part of the public API, use `eval_pyjinn_script` instead
+
+        Evaluates sourcecode as Pyjinn sourcecode, and returns a handle to the underlying pyjinn script instance.
+
+        Redirects `.get` attribute access from `JavaObject` to `PyjinnScript.get()`
+        """
+        def __init__(self, src) -> JavaObject: ...
+    def submit(obj:JavaObject) -> str:
+        """
+        Submit an object to Pyjinn, returns the uuid it was stored under, to `__script__.vars["game"]["javapy"]`
+        """
+    def request(uuid:str) -> JavaObject:
+        """
+        Request an object from Pyjinn stored under `uuid` in `__script__.vars["game"]["javapy"]`
+        """
+    def convert(obj:BuiltinJavaObject|JavaObject) -> BuiltinJavaObject|JavaObject:
+        """
+        Converts a `java.py` (builtin) object into a `javapy.py` object, and vice versa
+        """
 __all__ = [
-    "JavaObject",
-    "JavaMember",
-    "JavaException"
-    "type",
+    "JavaException",
+    "JavaClass",
+    "ref",
+    "eval_pyjinn_script",
     "__script__",
-    "FixedReturnFunction",
-    "JavaType",
-    "JavaMethod"
+    "Pyjinn",
+    "add_event_listener",
+    "JavaObject",
+    "request",
+    "submit",
+    "convert",
+    "type",
+    "isinstance"
 ]
