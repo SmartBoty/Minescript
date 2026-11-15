@@ -45,6 +45,7 @@ Provides a small subset of the `GuiGraphics` / `GuiGraphicsExtractor` api:
 ```py
 GuiGraphics.fill(x1:int, y1:int, x2:int, y2:int, color:tuple[int,int,int,int])
 GuiGraphics.text(text:str, x:int, y:int, color:tuple[int,int,int,int])
+GuiGraphics.item(id:str, x:int, y:int, amount:int=1)
 ```
 
 ## `Gizmos`
