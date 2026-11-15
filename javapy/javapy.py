@@ -26,6 +26,9 @@ import inspect
 import ast
 from time import sleep
 import builtins
+import importlib.util
+from pathlib import Path
+import os
 
 _bridge = socket.socket()
 _bridge.bind(("127.0.0.1", 0))
@@ -178,7 +181,7 @@ def ref(item):
     """
     Returns the `ref_id` of any object that has a java side refference
 
-    raises `TypeError` if there is no java side object
+    raises `TypeError` if the object doesnt have a java side refference
     """
     self = js.get(item)
     if self is not None: return self["ref"]
@@ -387,6 +390,41 @@ def eval_pyjinn_script(src:str):
     Evaluates sourcecode as Pyjinn sourcecode, and returns a handle to the underlying pyjinn script instance
     """
     return PyjinnScript(src)
+
+def import_script_as_pyjinn(path:str):
+    """
+    Import a Pyjinn script form a `.py` file
+
+    Relative filenames are relative to the module this was called from.
+    """
+    caller = inspect.currentframe().f_back
+    package = caller.f_globals.get("__package__")
+    if path.startswith("."):
+        if not package: raise ImportError("Relative import without a known package")
+        path = importlib.util.resolve_name(path, package)
+    spec = importlib.util.find_spec(path)
+    if spec is None or spec.origin is None: raise ModuleNotFoundError(path)
+    return eval_pyjinn_script(Path(spec.origin).read_text())
+
+def import_pyjinn_script(pyj_filename:str): # Most of this function is yoinked from 'java.py' (builtin) | ty maxuser <3
+    """
+    Imports a Pyjinn script from a `.pyj` file
+
+    Relative filenames are relative to the `minescript` directory.
+    """
+    original_dir = os.getcwd()
+    cleanup = lambda: None
+    try:
+        # TODO(maxuser): Consider doing chdir in minescript.py so all scripts use minescript as cwd.
+        if os.path.basename(original_dir) != "minescript":
+            cleanup = lambda: os.chdir(original_dir)
+            os.chdir("minescript")
+        with open(pyj_filename, 'r', encoding='utf-8') as pyj_file:
+            script_code = pyj_file.read()
+        script = eval_pyjinn_script(script_code)
+        return script
+    finally:
+        cleanup()
 
 class _PyjinnContextLeave(Exception): pass
 
