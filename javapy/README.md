@@ -7,7 +7,7 @@ Requirements:
 Please report any inconsistencies in the discord: https://discord.com/channels/930220988472389713/1543638360143437845
 
 Supports:
-- ~3× faster execution compared to `java.py` (builtin)
+- ~3-6× faster execution compared to `java.py` (builtin)
 - `type()`* class grabbing (Equivalend of `Object.class` in java)
 - `isinstance` checks
 - `len` check
