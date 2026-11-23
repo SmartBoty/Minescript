@@ -6,13 +6,13 @@ Requirements:
 
 Please report any inconsistencies in the discord: https://discord.com/channels/930220988472389713/1543638360143437845
 
-Supports:
+Features:
 - ~3-6× faster execution compared to `java.py` (builtin)
 - `type()`* class grabbing (Equivalend of `Object.class` in java)
-- `isinstance` checks
-- `len` check
+- `isinstance`, `len` checks
 - Converting `java.py` (builtin) objects to `javapy` objects and back
 - Automatic GC (garbage collection)
+- Evaluating src or syntax to pyjinn code
 
 ## Javapy specific functions / objects
 ### `convert(obj:JavaObject) -> JavaObject`
@@ -24,47 +24,37 @@ Converts a `java.py` (builtin) object into a Javapy object
 
 Note: Does not create a copy of the java side object
 
-### `submit_object(obj:JavaObject) -> str`
+### `submit(obj:JavaObject) -> str`
 Submits a Javapy object to a global space. Returns the uuid it was stored under. All processes see the same global space
 
 Note: Does not create a copy of the java side object
 
-### `request_object(uuid:str) -> JavaObject`
+### `request(uuid:str) -> JavaObject`
 Requests a previously submitted (or manually submitted via pyjinn) object under a uuid. All processes see the same global space
 
 Note: Does not create a copy of the java side object
 
 ### `type(obj)`
-Import it to replace the already existing `type()` function. It behaves exactly how it does in pyjinn, returning the java side class of the object. Works exactly like the builtin for any other object
-
-### `FixedReturnFunction(obj:JavaObject)`
-Returns a lambda style function, that has a fixed return value (equal to `lambda *_: obj`). Can be used as an arg in java method calls
+Import it to replace the already existing `type()` class. It behaves exactly how it does in pyjinn, returning the java side class of the object. Works exactly like the builtin for any other object
 
 ### `__script__`
-This is the handle to a completely empty pyjinn script instance. Currently does not support item assignment
+This is the handle to a completely empty pyjinn script instance
 
-### `Alternative_Member_Resolver`
-Since this [commit](https://github.com/SmartBoty/Minescript/commit/4d919dc42157a3137771cd851402e46434a223ba), `javapy` uses a different way to access fields and methods, making it more accurate to java:
+## Manual optimizations
+Constructing a java class is faster if done on the same line that it was evaluated on
 ```py
-from javapy import JavaClass
+JavaClass("some.class.path")() # Faster
 
-mc = JavaClass("net.minecraft.client.Minecraft")
-
-mc.getInstance()  # Correctly resolves as <METHOD ACCESS>
-mc.getInstance    # Correctly resolves as <FIELD ACCESS>
+# Slower
+clss = JavaClass("some.class.path")
+clss()
 ```
-Prior to this change, `javapy` simply overwritten the field, if a method with the same name exists. This should fix that.
 
-This new way, makes it differ from `java.py` (builtin), and becus of this, it can be disabled:
-```py
-from javapy import Alternative_Member_Resolver
-
-Alternative_Member_Resolver.enable() # Enabled by default, global (overwrites local state)
-Alternative_Member_Resolver.disable() # Disable it, global (overwrites local state)
-Alternative_Member_Resolver.clear() # Disables it, and allow thread local `with` statements to change this state locally
-with Alternative_Member_Resolver: # Enables it locally, then disables it. Threadsafe
-    ...
-```
+## Quirks
+Javapy can differentiate between `foo.bar` and `foo.bar()`, and they will work differently
+- `foo.bar` is resolved as a field access
+- `foo.bar()` is resolved as a method call
+This means, that if `foo` has a method called `bar`, the only way to access it (outside of reflection) is by doing `foo.bar()` wich will immediately call said method, making it impossible to get a refference to the method.
 
 # Example usages:
 
@@ -75,20 +65,34 @@ from time import perf_counter, sleep
 
 echo("Builtin library:")
 sleep(2)
+echo("Begin")
 start = perf_counter()
 from system.lib.java import JavaClass
-random = JavaClass("java.util.Random")()
+echo(f"Library loaded in {perf_counter() - start} seconds!")
+start = perf_counter()
+random = JavaClass("java.util.Random")
+echo(f"'java.util.Random' class resolved in {perf_counter() - start} seconds!")
+start = perf_counter()
+random = random()
+echo(f"'java.util.Random' class instantiated in {perf_counter() - start} seconds!")
+start = perf_counter()
 for _ in range(50):
     echo(random.nextInt())
 
 echo(f"50 iterations took {perf_counter() - start} seconds. Now lets look at javapy:")
 sleep(5)
+echo("Begin")
 start = perf_counter()
 from javapy import JavaClass
-random = JavaClass("java.util.Random")()
-
-for _ in range(150):
+echo(f"Library loaded in {perf_counter() - start} seconds!")
+start = perf_counter()
+random = JavaClass("java.util.Random")
+echo(f"'java.util.Random' class resolved in {perf_counter() - start} seconds!")
+start = perf_counter()
+random = random()
+echo(f"'java.util.Random' class instantiated in {perf_counter() - start} seconds!")
+start = perf_counter()
+for _ in range(300):
     echo(random.nextInt())
-echo(f"150 iterations took only {perf_counter() - start} seconds :D")
-echo("(For both, it includes the time it takes to resolve the java.util.Random class, as well as the library loading)")
+echo(f"300 iterations took only {perf_counter() - start} seconds :D")
 ```
