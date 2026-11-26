@@ -5,7 +5,7 @@ Concept heavily inspired by [MSP]()
 # What is Pyjinn plus?
 p+ / pp is a collection of utilities for pyjinn. Many of its additions are recreations of python libraries, separated into neat classes you can import
 # Table of contents
-- [reflect]() - Relfection helper
+- [reflect](https://github.com/SmartBoty/Minescript/pyjinn_plus/README.md#reflect) - Relfection helper
 - [JavaArray]() - Array creation helper
 - [json]()
 - [inspect]()
