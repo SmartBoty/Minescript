@@ -11,6 +11,7 @@ _String = JavaClass("java.lang.String")
 _Long = JavaClass("java.lang.Long")
 _Path = JavaClass("java.nio.file.Path")
 _Paths = JavaClass("java.nio.file.Paths")
+_File = JavaClass("java.io.File")
 _Files = JavaClass("java.nio.file.Files")
 _FileAlreadyExistsException = JavaClass("java.nio.file.FileAlreadyExistsException")
 _NoSuchFileException = JavaClass("java.nio.file.NoSuchFileException")
@@ -745,11 +746,18 @@ class ClassBuilder:
         self.java_path.touch()
         self.java_path.write_text(src)
         errors = ByteArrayOutputStream()
-        exitcode = [m for m in type(_JavaCompiler).getMethods() if m.getName() == "run"][0].invoke(_ToolProvider.getSystemJavaCompiler(), JavaArray(None, None, errors, JavaArray("-d", _wd.path.toString(), self.java_path.path.toString(),specific_type=_String)))
+        exitcode = [m for m in type(_JavaCompiler).getMethods() if m.getName() == "run"][0].invoke(_ToolProvider.getSystemJavaCompiler(), JavaArray(None, None, errors, JavaArray("-d", _wd.path.toString(), "--class-path", self._get_class_paths(), self.java_path.path.toString(),specific_type=_String)))
         try:
             if exitcode != 0: raise Exception(f"Compliation failed: [{exitcode}]\n{errors.toString()}")
         finally: self.java_path.unlink()
         return self.load_class(self.class_path)
+
+    def _get_class_paths(self):
+        class_paths = _System.getProperty("java.class.path")
+        mods_directory = Path(_System.getProperty("user.dir"), "mods").path
+        for mod in mods_directory.toFile().listFiles():
+            class_paths += _File.pathSeparator + mod.getPath()
+        return self.class_paths
 ClassBuilder = ClassBuilder()
 
 if TYPE_CHECKING:
