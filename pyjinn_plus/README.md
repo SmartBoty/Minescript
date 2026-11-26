@@ -1,7 +1,7 @@
 # Pyjinn Plus
 An experimental pyjinn library containing many utilities
 
-Concept heavily inspired by [MSP]()
+Concept heavily inspired by [MSP](https://github.com/R4z0rX/minescript-scripts/tree/main/Minescript-Plus)
 # What is Pyjinn plus?
 p+ / pp is a collection of utilities for pyjinn. Many of its additions are recreations of python libraries, separated into neat classes you can import
 # Table of contents
