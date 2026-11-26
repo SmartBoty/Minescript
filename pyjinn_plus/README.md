@@ -5,26 +5,26 @@ Concept heavily inspired by [MSP]()
 # What is Pyjinn plus?
 p+ / pp is a collection of utilities for pyjinn. Many of its additions are recreations of python libraries, separated into neat classes you can import
 # Table of contents
-- [reflect](https://github.com/SmartBoty/Minescript/pyjinn_plus/README.md#reflect) - Relfection helper
-- [JavaArray]() - Array creation helper
-- [json]()
-- [inspect]()
-- [Path]()
-- [math]()
-- [random]()
-- [threading]()
-- [Thread]()
-- [Lock]()
-- [time]()
-- [asyncio]()
-- [socket]() - Very experimental, usage not advised
-- [Queue]()
-- [Builtins]()
-- [os]()
-- [pyjinn]() - Interpreter utilities
-- [java]() - Java utilities
-- [shutil]()
-- [ClassBuilder]() - Custom java class creation
+- [reflect](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#reflect) - Relfection helper
+- [JavaArray](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#JavaArray) - Array creation helper
+- [json](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#json)
+- [inspect](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#inspect)
+- [Path](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#Path)
+- [math](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#math)
+- [random](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#random)
+- [threading](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#threading)
+- [Thread](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#Thread)
+- [Lock](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#Lock)
+- [time](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#time)
+- [asyncio](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#asyncio)
+- [socket](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#socket) - Very experimental, usage not advised
+- [Queue](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#Queue)
+- [builtins](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#builtins)
+- [os](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#os)
+- [pyjinn](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#pyjinnn) - Interpreter utilities
+- [java](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#java) - Java utilities
+- [shutil](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#shutil)
+- [ClassBuilder](https://github.com/SmartBoty/Minescript/blob/main/pyjinn_plus/README.md#ClassBuilder) - Custom java class creation
 
 # API
 ## `reflect`
@@ -53,7 +53,7 @@ p+ / pp is a collection of utilities for pyjinn. Many of its additions are recre
 ### `classes_of(items)`:
 - Returns an array of the classes of the items passed down, casted to the runtime type of java.lang.Class
 ## `json`
-A copy of [pyjinn_json]()
+A copy of [pyjinn_json](https://github.com/SmartBoty/Minescript/blob/main/pyjinn/pyjinn_json.py)
 ### `dumps(obj)`:
 - Returns the json string equivalent of the object passed down
 ### `loads(json_string:str)`:
