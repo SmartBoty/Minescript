@@ -1,6 +1,6 @@
 #!python
-#from system.pyj.minescript import JavaClass
 import atexit
+from system.pyj.minescript import EventLoop, JavaClass, add_event_listener, remove_event_listener, __script__, JavaList
 _ToNumberPolicy = JavaClass("com.google.gson.ToNumberPolicy")
 _Gson = JavaClass("com.google.gson.GsonBuilder")().serializeNulls().setObjectToNumberStrategy(_ToNumberPolicy.LONG_OR_DOUBLE).create()
 _Map = JavaClass("java.util.Map")
@@ -40,11 +40,37 @@ _StandardCharsets = JavaClass("java.nio.charset.StandardCharsets")
 _BufferedReader = JavaClass("java.io.BufferedReader")
 _InputStreamReader = JavaClass("java.io.InputStreamReader")
 _InetSocketAddress = JavaClass("java.net.InetSocketAddress")
-_LinkedBlockingQueue = JavaClass("java.util.LinkedBlockingQueue")
+_LinkedBlockingQueue = JavaClass("java.util.concurrent.LinkedBlockingQueue")
 _TimeUnit = JavaClass("java.util.concurrent.TimeUnit")
+_LinkOption = JavaClass("java.nio.file.LinkOption")
+_Assignment = JavaClass("org.pyjinn.interpreter.Script$Assignment")
+_IllegalArgumentException = JavaClass("java.lang.IllegalArgumentException")
+_Script = JavaClass("org.pyjinn.interpreter.Script")
+_PyjObject = JavaClass("org.pyjinn.interpreter.Script$PyjObject")
+_Generator = JavaClass("org.pyjinn.interpreter.Generator")
+_Context = JavaClass("org.pyjinn.interpreter.Script$Context")
+_Minescript = JavaClass("net.minescript.common.Minescript")
+_TypeChecker = JavaClass("org.pyjinn.interpreter.Script$TypeChecker")
+_NoSuchMethodException = JavaClass("java.lang.NoSuchMethodException")
+_Integer = JavaClass("java.lang.Integer")
+_Boolean = JavaClass("java.lang.Boolean")
+_Byte = JavaClass("java.lang.Byte")
+_Short = JavaClass("java.lang.Short")
+_Float = JavaClass("java.lang.Float")
+_URLClassLoader = JavaClass("java.net.URLClassLoader")
+_URL = JavaClass("java.net.URL")
+_ToolProvider = JavaClass("javax.tools.ToolProvider")
+_mc = JavaClass("net.minecraft.client.Minecraft").getInstance()
 
 TYPE_CHECKING = False
+"""
+`typing.TYPE_CHECKING` equivalent
+"""
 
+_byte_type = _Byte.TYPE
+_boolean_type = _Boolean.TYPE
+_int_types = (_Integer.TYPE,_Short.TYPE,_Long.TYPE)
+_float_types = (_Float.TYPE,_Double.TYPE)
 class reflect:
     def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'reflect'")
 
@@ -53,6 +79,19 @@ class reflect:
         "field":{},
         "method":{}
     }
+
+    def matches_types(self, firsthand_types, secondhand_types):
+        length = len(firsthand_types)
+        if length != len(secondhand_types): return False
+        if length == 0: return True
+        for i in range(length):
+            if secondhand_types[i] == _byte_type and firsthand_types[i] == type(_Byte): pass
+            elif secondhand_types[i] == _boolean_type and firsthand_types[i] == type(_Boolean): pass
+            elif secondhand_types[i] in _int_types and firsthand_types[i] == type(_Long): pass
+            elif secondhand_types[i] in _float_types and firsthand_types[i] == type(_Double): pass
+            elif isinstance(secondhand_types[i], firsthand_types[i]): pass
+            else: return False
+        return True
 
     def as_class(self,obj):
         if isinstance(obj, _JavaClass): return type(obj)
@@ -73,6 +112,27 @@ class reflect:
         if raw_field: return f
         else: return f.get(obj)
 
+    def method(self, obj, method, args=[], raw_method=False):
+        clss = reflect.as_class(obj)
+        id = clss.getName()
+        classes_array = JavaArray.classes_of(args)
+        args = JavaArray.of(args)
+        signature = method + str(classes_array)
+        if id in reflect._cached["method"]:
+            if signature in reflect._cached["method"][id]:
+                if raw_method: return reflect._cached["method"][id][signature]
+                else: return reflect._cached["method"][id][signature].invoke(obj,args)
+        else: reflect._cached["method"][id] = {}
+        methods = clss.getDeclaredMethods()
+        for m in methods:
+            if m.getName() == method:
+                if reflect.matches_types(classes_array, m.getParameterTypes()):
+                    m.setAccessible(True)
+                    reflect._cached["method"][id][signature] = m
+                    if raw_method: return m
+                    else: return m.invoke(obj,args)
+        raise _NoSuchMethodException(f"{id}.{method}({", ".join([c.getName() for c in classes_array])})")
+
     def cast(self, obj, to_type): return reflect.as_class(to_type).cast(type(_Object).cast(obj))
 reflect = reflect()
 
@@ -84,8 +144,13 @@ class JavaArray:
             for i,arg in enumerate(items):
                 _Array.set(array, i, arg)
             return array
-    def __call__(self, *items):
-        return reflect.field(list(items), "list").toArray()
+    def __call__(self, *items, specific_type=_Object):
+        if specific_type is _Object: return reflect.field(list(items), "list").toArray()
+        else:
+            array = _Array.newInstance(type(specific_type),len(items))
+            for i,arg in enumerate(items):
+                _Array.set(array, i, arg)
+            return array
     def to_classes(self, *items):
         return _TypeChecker.getTypes(JavaArray.of(items))
     def classes_of(self, items):
@@ -154,9 +219,18 @@ class json:
 json = json()
 
 class inspect:
+    _dataStackField = reflect.field(_Context,"dataStack",raw_field=True)
+
     def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'inspect'")
 
     def callstack(self): return reflect.field(__script__,"callStack").get().toArray()[1:]
+
+    def stack(self): return self._dataStackField.get(__script__.mainModule().globals())
+
+    def instructions(self): return reflect.field(__script__.mainModule().globals().code.instructions(),"instructions")
+
+    def get_instructions_of(self, obj):
+        print(obj)
 
     def getsource(self,obj):
         definition = obj.functionDef()
@@ -218,7 +292,7 @@ class Path:
     def __init__(self, path, *path_pieces):
         self.path = _Path.of(self._unwrap_str(path), JavaArray.of(path_pieces,type("")))
 
-    def name(self) -> str: return self.path.getFileName()
+    def name(self) -> str: return str(self.path.getFileName())
 
     def parent(self): return Path(self.path.getParent())
 
@@ -245,7 +319,7 @@ class Path:
             if not missing_ok: raise e
 
     def mkdir(self, parents=False):
-        if parents: _Files.createdirectories(self.path)
+        if parents: _Files.createDirectories(self.path,JavaArray.of([],_FileAttribute))
         else: _Files.createDirectory(self.path)
 
     def write_text(self, data): _Files.writeString(self.path, data, JavaArray.of([],_OpenOption))
@@ -256,13 +330,13 @@ class Path:
 
     def read_bytes(self, data): return _Files.readAllBytes(self.path)
 
-    def exists(self): return _Files.exists(self.path)
+    def exists(self): return _Files.exists(self.path, JavaArray.of([],_LinkOption))
 
-    def is_dir(self): return _Files.isDirectory(self.path)
+    def is_dir(self): return _Files.isDirectory(self.path, JavaArray.of([],_LinkOption))
 
-    def is_file(self): return _Files.isRegularFile(self.path)
+    def is_file(self): return _Files.isRegularFile(self.path, JavaArray.of([],_LinkOption))
 
-    def relative_path_to(self, path): return Path(self.path.relativize(path))
+    def relative_path_to(self, path): return Path(self.path.relativize(Path(path).path))
 
     def len(self): return self.__len__()
 
@@ -286,7 +360,9 @@ class math:
 
     def floor(self, x): return int(_Math.floor(x))
 
-    def fabs(self, x): return _Math.fabs(x)
+    def abs(self, x): return abs(x)
+
+    #def fabs(self, x): return _Math.fabs(x)
 
     def gcd(self, a, b): return int(_BigInteger.valueOf(a).gcd(_BigInteger.valueOf(b)))
 
@@ -298,7 +374,7 @@ class math:
 
     def remainder(self, a, b): return _Math.IEEEremainder(a, b)
 
-    def copysign(self, a, b): return _Math.copysign(a, b)
+    #def copysign(self, a, b): return _Math.copysign(a, b)
 
     def isfinite(self, x): return _Double.isFinite(x)
 
@@ -367,9 +443,11 @@ class random:
 
     def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'random'")
 
-    def random(self): return self.nextDouble()
+    def random(self): return self.rng.nextDouble()
 
-    def randint(self, a, b): return self.rng.nextInt(a, b + 1)
+    def randint(self, a, b=None):
+        if b is None: return self.rng.nextInt(a)
+        else: return min(a,b) + self.rng.nextInt(max(a,b))
 
     def randrange(self, a, b=None):
         if b is None: return self.rng.nextInt(a)
@@ -377,7 +455,7 @@ class random:
 
     def uniform(self, a, b): return a + (b - a) * self.rng.nextDouble()
 
-    def choice(self, iterable): iterable[random.randint(len(iterable))]
+    def choice(self, iterable): return iterable[random.randint(len(iterable))]
 
     def shuffle(self, iterable):
         seq = JavaList(iterable)
@@ -427,7 +505,8 @@ class Thread:
             try: self.target(*args,**kwargs)
             except: pass
             if self.daemon: remove_event_listener(self._listener_id)
-            self._thread.stop()
+            try: self._thread.stop()
+            except: pass
         self._thread = _Thread(_Runnable(lambda: _thread_worker(self, args, kwargs)),name) if name is not None else _Thread(_Runnable(lambda: _thread_worker(self, args, kwargs)))
         if daemon: self._listener_id = add_event_listener("world",lambda _: None)
         else: self._listener_id = None
@@ -470,10 +549,12 @@ class Lock:
         if self.lock.availablePermits() > 0: self.lock.release()
 
 class time:
+    def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'time'")
     def sleep(self, time): _Thread.sleep(int(time*1000))
     def perf_counter(self): return _System.nanoTime() / 1e9
     def perf_counter_ns(self): return _System.nanoTime()
     def time(self): return _System.currentTimeMillis() / 1000
+time = time()
 
 class asyncio:
     def __init__(self):
@@ -483,15 +564,15 @@ class asyncio:
 
     def run(self, coro): self._event_loop.run(lambda _: coro())
 
-    def sleep(self, time): self._event_loop.sleep(time)
+    async def sleep(self, time): return await self._event_loop.sleep(time)
 asyncio = asyncio()
 
 class socket:
     def __init__(self):
         self._socket = _Socket()
         self._socket.setSoTimeout(1)
-        self._writer = _BufferedWriter(_OutputStreamWriter(self.socket.getOutputStream(), _StandardCharsets.UTF_8))
-        self._reader = _BufferedReader(_InputStreamReader(self.socket.getInputStream(), _StandardCharsets.UTF_8))
+        self._writer = _BufferedWriter(_OutputStreamWriter(self._socket.getOutputStream(), _StandardCharsets.UTF_8))
+        self._reader = _BufferedReader(_InputStreamReader(self._socket.getInputStream(), _StandardCharsets.UTF_8))
 
     def write(self, data): self._writer.write(str(data))
 
@@ -527,13 +608,149 @@ class Queue:
 
     def get_nowait(self): return self.get(False)
 
-    def empty(self): return self.q.remainingCapacity() == 0
+    def empty(self): return self.q.size() == 0
 
     def qsize(self): return self.q.size()
 
-if not TYPE_CHECKING:
+_pyjinn_iter = iter
+_pyjinn_next = next
+class builtins:
+    def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'builtins'")
+    
+    def any(self, iterable):
+        for i in iterable:
+            if i: return True
+        return False
+
+    def setattr(self, obj,name,value):
+        if not _Assignment.assignField(obj,name,value):
+            raise _IllegalArgumentException(f"Unsupported expression type for lhs of assignment: {obj}")
+
     def map(callable, iterable):
         return [callable(i) for i in iterable]
+
+    def iter(self, obj):
+        if isinstance(obj, _PyjObject):
+            while True:
+                yield obj.__next__()
+        else: return _pyjinn_iter(obj)
+
+    def next(self, obj):
+        if isinstance(obj, _Generator):
+            return obj.send(None)
+        else: return _pyjinn_next(obj)
+builtins = builtins()
+
+class os:
+    def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'os'")
+
+    def getcwd(self):
+        return _System.getProperty("user.dir")
+os = os()
+
+_call = [m for m in type(_Script.Function).getDeclaredMethods() if m.getName() == "call"][0]
+class _JoblessScriptManager:
+    def __init__(self, script):
+        self.script = script
+
+    def invoke(self, func, *args):
+        return _call.invoke(self.script.get(func),JavaArray(self.script.mainModule().globals(),JavaArray(args)))
+
+    def get(self, name):
+        return self.script.get(name)
+
+    def wraps(self, obj):
+        return lambda *args: _call.invoke(obj,JavaArray(self.script.mainModule().globals(),JavaArray(args)))
+
+    def export(self): return self.script
+
+_symbol_cache1 = reflect.field(__script__,"symbolCache")
+_symbol_cache2 = [reflect.field(_symbol_cache1,f) for f in ["toRuntimeClassName", "toPrettyClassName", "toRuntimeFieldName", "toRuntimeMethodNames"]]
+_module_handler = reflect.field(__script__,"moduleHandler")
+_class_loader = reflect.field(__script__,"classLoader")
+class pyjinn:
+    def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'pyjinn'")
+
+    def eval_pyjinn_script(self, src):
+        script = _Minescript.loadPyjinnScript(JavaList(["__eval_pyjinn_script__"]), src)
+        script.redirectStdout(__script__.stdout)
+        script.redirectStderr(__script__.stderr)
+        script.vars["job"] = __script__.vars["job"]
+        script.vars["game"] = __script__.vars["game"]
+        script.exec()
+        return script
+
+    def jobless_script(self, src, argv=[], stdout=__script__.stdout, stderr=__script__.stdout):
+        script = _Minescript.loadPyjinnScript(JavaList(["__compile__"]), src)
+        insts = reflect.field(script.mainModule().globals().code.instructions(),"instructions")
+        script = _Script("__jobless_pyjinn_script__",_class_loader, _module_handler, *_symbol_cache2)
+        insts2 = reflect.field(script.mainModule().globals().code.instructions(),"instructions")
+        insts2.clear()
+        insts2.addAll(insts)
+        script.vars["sys_argv"] = argv
+        script.vars["sys_version"] = __script__.vars["sys_version"]
+        script.vars["game"] = __script__.vars["game"]
+        script.redirectStdout(stdout)
+        script.redirectStderr(stderr)
+        script.mainModule().exec()
+        return _JoblessScriptManager(script)
+pyjinn = pyjinn()
+
+class java:
+    def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'java'")
+
+    def JavaClass(self, clss): return _JavaClass.of(_Class.forName(clss))
+java = java()
+
+class shutil:
+    def rmtree(self, path):
+        if isinstance(path, Path): path = path.path
+        elif isinstance(path, str): path = Path(path).path
+        if isinstance(path, _Path): path = path.toFile()
+        for file in path.listFiles():
+            if file.isDirectory(): self.rmtree(file)
+            else: file.delete()
+        path.delete()
+shutil = shutil()
+
+_JavaCompiler = JavaClass("javax.tools.JavaCompiler")
+ByteArrayOutputStream = JavaClass("java.io.ByteArrayOutputStream")
+
+_wd = Path(os.getcwd()) / "minescript" / "system" / "pyjinn_plus" / "runtime_classes"
+_wd.mkdir(parents=True)
+_reset_check = _wd / "reset_check.txt"
+_reset_check.touch()
+_id = _mc.toString()
+if _reset_check.read_text() != _id:
+    shutil.rmtree(_wd)
+    _wd.mkdir(parents=True)
+    _reset_check.touch()
+    _reset_check.write_text(_id)
+_loader = _URLClassLoader(JavaArray(_wd.path.toUri().toURL(), specific_type=_URL), _Thread.currentThread().getContextClassLoader())
+class ClassBuilder:
+    def __call__(self,*args,**kwargs): raise Exception("Cannot instantiate 'ClassBuilder'")
+
+    def load_class(self,clss):
+        return _JavaClass.of(_loader.loadClass(clss))
+
+    def new_class(self, class_path, src):
+        self.class_path = class_path
+        self.class_name = class_path.split(".")[-1]
+        self.final_dir = _wd / Path(*class_path.split(".")[:-1])
+        self.file = self.final_dir / (self.class_name + ".class")
+        self.final_dir.mkdir(parents=True)
+        if self.file.exists():
+            return self.load_class(self.class_path)
+        self.java_path = self.final_dir / (self.class_name + ".java")
+        self.java_path.touch()
+        self.java_path.write_text(src)
+        errors = ByteArrayOutputStream()
+        exitcode = [m for m in type(_JavaCompiler).getMethods() if m.getName() == "run"][0].invoke(_ToolProvider.getSystemJavaCompiler(), JavaArray(None, None, errors, JavaArray("-d", _wd.path.toString(), self.java_path.path.toString(),specific_type=_String)))
+        try:
+            if exitcode != 0: raise Exception(f"Compliation failed: [{exitcode}]\n{errors.toString()}")
+        finally: self.java_path.unlink()
+        return self.load_class(self.class_path)
+ClassBuilder = ClassBuilder()
 
 if TYPE_CHECKING:
     class reflect:
@@ -550,26 +767,38 @@ if TYPE_CHECKING:
             """
             Grabs a field of an object, regardless of visibility flags
     
-            Searches top level only
+            Doesnt search superclasses
             """
         @staticmethod
         def cast(obj, to_type) -> any:
             """
             Cast an object to a specific runtime type
             """
+        @staticmethod
+        def method(obj, method:str, args:list=[], *, raw_method=False) -> any:
+            """
+            Invokes a method of an object, regardless of visibility flags
+
+            Doesnt search superclasses
+            """
+        @staticmethod
+        def matches_types(firsthand_types:list, secondhand_types:list) -> bool:
+            """
+            Returns wether the types of 2 iterables can be interchanged according to pyjinns rules
+            """
     class JavaArray:
         """
         Helper methods to creating java arrays
         """
         @staticmethod
-        def of(items:list|tuple, specific_type=_Object) -> any:
+        def of(items:list|tuple, specific_type=object) -> any:
             """
             Returns an array with the items from an iterable, casted to a specific runtime type
 
             Default `specific_type` is `java.lang.Object`
             """
         @staticmethod
-        def __new__(cls, *items) -> any:
+        def __new__(cls, *items, specific_type:any=_Object) -> any:
             """
             Returns an array made from the items passed down, casted to a specific runtime type
 
@@ -723,6 +952,10 @@ if TYPE_CHECKING:
             """
             `pathlib.Path / obj` equivalent
             """
+        def __truediv__(self, other) -> Path:
+            """
+            `pathlib.Path / str` equivalent
+            """
     class math:
         """
         Provides a subset of the functionality of the `math` library
@@ -737,11 +970,11 @@ if TYPE_CHECKING:
             """
             `math.floor(...)` equivalent
             """
-        @staticmethod
-        def fabs(x:int|float):
-            """
-            `math.fabs(...)` equivalent
-            """
+        #@staticmethod
+        #def fabs(x:int|float):
+        #    """
+        #    `math.fabs(...)` equivalent
+        #    """
         @staticmethod
         def gcd(a:int|float, b:int|float):
             """
@@ -917,11 +1150,10 @@ if TYPE_CHECKING:
             """
             `math.fma(...)` equivalent
             """
-    class map:
         @staticmethod
-        def __new__(cls, callable, iterable) -> list:
+        def abs(x:int|float):
             """
-            Similar to pythons `map`, but returns a list instead of an iterator
+            `builtins.abs(...)` equivalent
             """
     class random:
         """
@@ -1111,7 +1343,7 @@ if TYPE_CHECKING:
 
             Does not block
             """
-        def sleep(time):
+        async def sleep(time):
             """
             `asyncio.sleep(...)` equivalent
             """
@@ -1176,4 +1408,90 @@ if TYPE_CHECKING:
             """
             `queue.Queue.qsize()` equivalent
             """
+    class builtins:
+        """
+        Provides a small subset of the functionality of the `builtins` library
 
+        Note: output is not guaranteed to be exact with the `builtins` library
+        """
+        class map:
+            """
+            Similar to pythons `map`, but returns a list instead of an iterator
+            """
+            @staticmethod
+            def __new__(cls, callable, iterable) -> list: pass
+        @staticmethod
+        def any(iterable):
+            """
+            Practically equal to pythons `any(...)` function
+            """
+        @staticmethod
+        def setattr(obj:object, name:str, value):
+            """
+            Identical to pythons `setattr`
+
+            `obj.x = y` is equal to `setattr(obj, "x", y)`
+            """
+        @staticmethod
+        def iter(obj):
+            """
+            `builtins.iter(...)` equivalent
+            """
+            yield _ #type:ignore
+        def next(obj) -> any:
+            """
+            `builtins.next(...)` equivalent
+            """
+    class os:
+        """
+        Provides a tiny subset of the functionality of the `os` library
+
+        Note: output is not guaranteed to be exact with the `os` library
+        """
+        @staticmethod
+        def getcwd() -> str:
+            """
+            `os.getcwd()` equivalent
+            """
+    class java:
+        """
+        Helper utilities for java specific things
+        """
+        @staticmethod
+        def JavaClass(clss:str) -> any:
+            """
+            A better version of the builtin `JavaClass`, that accepts variables as arguments
+            """
+    class shutil:
+        """
+        Provides a tiny subset of the functionality of the `shutil` library
+        
+        Note: output is not guaranteed to be exact with the `shutil` library
+        """
+        @staticmethod
+        def rmtree(path:Path|str):
+            """
+            `shutil.rmtree()` equivalent
+            """
+    class ClassBuilder:
+        """
+        A helper class to building java class from source code
+
+        Automatically deletes old classes on a JVM restart
+        """
+        @staticmethod
+        def load_class(clss:str) -> any:
+            """
+            Loads in an already loaded class, that was made with `ClassBuilder`
+            """
+        @staticmethod
+        def new_class(class_path:str, src:str) -> any:
+            """
+            Compiles a java class from sourcecode, and returns the JavaClass handle to it
+
+            `class_path` must be the `package` + `class_name`
+
+            `src` must be a packaged java class
+
+            If a class under the same `class_path` had been created already, it returns that instead
+            """
